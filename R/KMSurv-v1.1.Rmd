@@ -1,0 +1,1006 @@
+---
+title: "KMSurv-v1.1"
+output: pdf_document
+date: "2025-11-17"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, packages}
+library(KMsurv)
+library(survival)
+library(haven)
+library(dplyr)
+library(purrr)
+library(CERFIT)
+library(tidyr)
+library(ggplot2)
+library(plotly)
+library(knitr)
+library(kableExtra)
+
+```
+
+```{r readin}
+data(bmt)
+```
+
+```{r timedep}
+bmt$SUBJID <- 1:nrow(bmt)
+bmt <- bmt %>%
+  mutate(across(c(group, z9), factor))
+
+#-------------------------------------------------------------------------------
+decile_breaks <- quantile(bmt$z7, probs = seq(0, 1, 1/6), na.rm = TRUE)
+
+#-------------------------------------------------------------------------------
+# add variable for F donor to M recipient mismatch
+
+bmt$fem_donor_male_recip <- ifelse(bmt$z4 == 0 & bmt$z3 == 1, 1, 0)
+
+# Verify the variable
+table(bmt$fem_donor_male_recip)
+
+#-------------------------------------------------------------------------------
+
+
+```
+
+With the counting-structure data, each predicted ITE should be interpreted as an interval-specific, history-dependent treatment effect for that row, not as a single fixed effect for the subject overall. In other words, for a given subject and time interval, the ITE represents the model’s estimated difference in expected outcome under alternative treatment levels conditional on that subject’s covariate history up to that interval, including the current value of any time-dependent covariates. Because the same subject can appear on multiple rows as their covariate history changes over time, that subject can have multiple ITEs, and differences across those ITEs reflect how the estimated treatment effect changes over follow-up rather than simple prediction noise.
+
+
+Poor positivity can yield propensity scores near 0 or 1, leading to unstable IPTW weights and possible fitting failures. When this occurs, a different propensity score estimation approach, random forest, may provide more stable results than GBM or CBPS in some binary-treatment settings.
+
+
+```{r fit.fm}
+set.seed(693)
+
+fit.fm <- CERFIT(Surv(t2, d2) ~ z1 + z2 + z5 + z6 + z7 + z8 + z10 + group | fem_donor_male_recip,
+              method = "observational",
+              PropForm = "randomForest",
+              data = bmt,
+              mtry = 4,
+              oob = TRUE,
+              ntrees = 800,
+              response = "survival",
+              surv_resid = "deviance")
+
+depth.fm <- MinDepth(fit.fm)
+depth.fm<- as.data.frame(depth.fm)
+depth.fm$Variable <- rownames(depth.fm)
+
+var_labels <- c(
+  z1    = "Patient Age (Years)",
+  z2    = "Donor Age (Years)",
+  z5    = "Patient CMV Status",
+  z6    = "Donor CMV Status",
+  z7    = "Waiting Time to Transplant (Days)",
+  z8    = "FAB Grade 4/5 and AML",
+  z10   = "MTX Used as GVHD Prophylactic",
+  group = "Disease Group"
+)
+
+depth.fm$Variable <- var_labels[depth.fm$Variable]
+
+ite.fm <- predict(fit.fm, type = "ITE")
+
+
+
+set.seed(758)
+
+fit.fm.d <- CERFIT(Surv(t1, d1) ~ z1 + z2 + z5 + z6 + z7 + z8 + z10 + group | fem_donor_male_recip,
+              method = "observational",
+              PropForm = "randomForest",
+              data = bmt,
+              mtry = 4,
+              oob = TRUE,
+              ntrees = 800,
+              response = "survival",
+              surv_resid = "deviance")
+
+depth.fm.d <- MinDepth(fit.fm.d)
+depth.fm.d<- as.data.frame(depth.fm.d)
+depth.fm.d$Variable <- rownames(depth.fm.d)
+
+var_labels <- c(
+  z1    = "Patient Age (Years)",
+  z2    = "Donor Age (Years)",
+  z5    = "Patient CMV Status",
+  z6    = "Donor CMV Status",
+  z7    = "Waiting Time to Transplant (Days)",
+  z8    = "FAB Grade 4/5 and AML",
+  z10   = "MTX Used as GVHD Prophylactic",
+  group = "Disease Group"
+)
+
+depth.fm.d$Variable <- var_labels[depth.fm.d$Variable]
+
+ite.fm.d <- predict(fit.fm.d, type = "ITE")
+```
+
+
+```{r plot3}
+
+#--------------------------------------------------------------
+
+ite.l <- as.data.frame(ite.fm) %>%
+  pivot_longer(cols = everything(), 
+               names_to = "F_M", values_to = "ITE")
+
+medians <- ite.l %>%
+  group_by(F_M) %>%
+  summarize(med = median(ITE, na.rm = TRUE))
+
+medians <- medians %>%
+  mutate(
+    label = paste0(
+      "Median = ", round(med, 2))
+    )
+
+violin.fig <- ggplot(ite.l, aes(x = F_M, y = ITE, fill = F_M)) +
+  geom_violin(trim = FALSE, alpha = 0.6, color = "darkgray") +
+  geom_boxplot(width = 0.1, outlier.shape = NA, alpha = 0.5) +
+  
+  geom_text(data = medians,
+            aes(y = med,                  
+                label = label),    
+            vjust = -15,                  
+            hjust = 0.5,                 
+            size = 3,                 
+            color = "black") +
+  
+  labs(
+    title = "Violin Plots of ITE by Exposure Level",
+    x = "F donor to M patient",
+    y = "Predicted ITE"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5)
+  )
+violin.fig
+
+density.fig <- ggplot(ite.l, aes(x = ITE)) +
+  geom_density(fill = "skyblue", alpha = 0.4) +
+  labs(
+    title = "Density Plot of Individualized Treatment Effects",
+    x = "ITE",
+    y = "Density"
+  ) +
+  theme_minimal()
+density.fig
+
+overall_median <- median(ite.l$ITE, na.rm = TRUE)
+
+density.fig <- ggplot(ite.l, aes(x = ITE)) +
+  geom_density(fill = "gray", alpha = 0.4) +
+  annotate("text",
+           x = overall_median,
+           y = 0,
+           label = paste0("Median = ", round(overall_median, 2)),
+           vjust = -1,
+           hjust = -0.1,
+           size = 4) +
+  labs(
+    title = "Density Plot of Individualized Treatment Effects",
+    x = "ITE",
+    y = "Density"
+  ) +
+  theme_minimal()
+
+```
+
+```{r EDA}
+
+#-------------------------------------
+bmt_f_m <- bmt[bmt$fem_donor_male_recip == 1, ]
+summary(bmt_f_m)
+
+age.fm <- bmt %>%
+   group_by(fem_donor_male_recip) %>%
+   summarise(
+     Median_Age = median(z1),
+     N = n()
+   ) 
+
+
+```
+wait time for transplant is one of the most influential variables. A longer wait time tends to show more negative ITE's. So when we see that the more risky female donor to male donor has the lowest ite, it is also probably because that group happens to have the largest mean wait time in the data. So, in this case, the trees trying to split on the most heterogeneity, is misleading, the female donor to male recipient is not necessarily more effective than the other combinations. 
+
+In the bone marrow transplant analysis, wait time to transplant appears to be one of the most influential variables driving treatment-effect heterogeneity. Patients with longer wait times tend to have more negative ITEs, suggesting better outcomes under those treatment comparisons. This helps explain why the female-donor to male-recipient group shows the lowest median ITE: that pattern may be driven, at least in part, by the fact that this group also has the largest mean wait time in the data, rather than indicating that this donor-recipient pairing is inherently more beneficial than the others. Because CERFIT grows trees by selecting splits that maximize heterogeneity in treatment effects, the resulting subgroup differences can reflect imbalances in influential covariates such as wait time. As a result, the apparent advantage of the female-donor to male-recipient group should be interpreted cautiously, since it may be capturing the effect of longer wait time rather than a true causal advantage of that sex combination itself. This is consistent with the CERFIT framework, where splits are chosen to maximize treatment-effect heterogeneity, not necessarily to isolate a single clinically meaningful driver without the influence of correlated covariates
+
+```{r depthfig}
+depth.fig <- ggplot(depth.fm, aes(x = reorder(Variable, -depth.fm), y = depth.fm)) +
+  geom_bar(stat = "identity", fill = "black") +
+  coord_flip() +
+  labs(
+    title = "Variable Importance by Minimal Depth - Relapse",
+    x = "Variable",
+    y = "Minimal Depth"
+  ) +
+  theme_minimal(base_size = 13)
+print(depth.fig)
+```
+
+```{r ite pre-process}
+
+dfite <- cbind(ite.fm, bmt)
+dfite_long <- as.data.frame(dfite) %>%
+  pivot_longer(cols = c(`y1-y0`), 
+               names_to = "F_M", values_to = "ITE")
+
+
+#-------------------------------------------------------------------------------
+negative_ite <- dfite_long[dfite_long$ITE < 0, ]
+
+#summary(negative_ite)
+
+cat("Number of individuals with negative ITE:", nrow(negative_ite), "\n")
+cat("Proportion with negative ITE:", round(nrow(negative_ite)/nrow(dfite_long), 3), "\n\n")
+
+```
+
+```{r groupbyPlots}
+wait_breaks <- quantile(bmt$z7, probs = seq(0, 1, 1/3), na.rm = TRUE)
+
+age_breaks <- quantile(bmt$z1, probs = seq(0, 1, 1/3), na.rm = TRUE)
+
+dfite_long <- dfite_long %>%
+  mutate(
+    wait_Level = case_when(
+      z7 < 120 ~ "Low (<120)",
+      z7 >= 120 & z7 < 210 ~ "Middle (120–210)",
+      z7 >= 210 ~ "High (≥210)"
+    ),
+    wait_Level = factor(wait_Level, 
+                         levels = c("Low (<120)", "Middle (120–210)", "High (≥210)")),
+    
+    
+    age_Level = case_when(
+      z1 < 23 ~ "<23",
+      z1 >= 23 & z1 < 33 ~ "23-33",
+      z1 >= 33 ~ "≥33"
+    ),
+    age_Level = factor(age_Level, 
+                         levels = c("<23", "23-33", "≥33")),
+  
+  
+  F_M = factor(F_M)
+  
+  )
+
+#---------------------------------------------------------------------------------
+age.plot <- ggplot(dfite_long, aes(x = factor(F_M), y = ITE, color = age_Level)) +
+  geom_jitter(alpha = 0.15, width = 0.2, size = 3) +  # scattered individual ITE
+  labs(
+    x = "F Donor - Male Patient",
+    y = "ITE",
+    color = "age",
+    title = "Relationship between ITE and F Donor - Male Patient",
+    subtitle = "Grouped by age"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "right")
+#---------------------------------------------------------------------------------
+
+# Create a version with multiple covariate columns for faceting
+dfite_multi <- dfite_long %>%
+  mutate(
+    CMV = factor(z5, labels = c("CMV-", "CMV+")),
+    Disease = factor(group,
+                     levels = c(1, 2, 3),
+                     labels = c("ALL", "AML Low Risk", "AML High Risk")),
+    Wait = wait_Level,
+    Age = age_Level
+  )
+
+# Facet by two variables to see interactions
+inter.plot <- ggplot(dfite_multi, aes(x = CMV, y = ITE, color = Wait)) +
+  geom_jitter(alpha = 0.4, width = 0.2, size = 2) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray40") +
+  facet_wrap(~Disease, ncol = 3) +
+  labs(
+    x = "Patient CMV Status",
+    y = "Individual Treatment Effect (ITE)",
+    color = "Wait Time",
+    title = "Individual Treatment Effects by Patient CMV Status and Disease Group",
+    subtitle = "Stratified by disease type, colored by wait time tercile"
+  ) +
+  scale_color_viridis_d(option = "D", end = 0.85) +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom",
+         plot.title = element_text(face = "bold")
+        )
+
+
+
+# Facet by two variables to see interactions
+interage.plot <- ggplot(dfite_multi, aes(x = Age, y = ITE, color = Wait)) +
+  geom_jitter(alpha = 0.4, width = 0.2, size = 2) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray40") +
+  facet_wrap(~Disease, ncol = 3) +
+  labs(
+    x = "Patient Age Group (Years)",
+    y = "Individual Treatment Effect (ITE)",
+    color = "Wait Time",
+    title = "Individual Treatment Effects by Patient Age Group and Disease Group",
+    subtitle = "Stratified by disease type, colored by wait time tercile"
+  ) +
+  scale_color_viridis_d(option = "D", end = 0.85) +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom",
+         plot.title = element_text(face = "bold")
+        )
+
+
+#-----------------------------------------------------------------------
+
+# Focus on specific subgroups of interest
+# For example: CMV+ patients with beneficial vs harmful effects
+
+dfite_annotated <- dfite_multi %>%
+  mutate(
+    effect_direction = case_when(
+      ITE < -0.1 ~ "Beneficial (ITE < -0.1)",
+      ITE > 0.1 ~ "Harmful (ITE > 0.1)",
+      TRUE ~ "Neutral"
+    ),
+    subgroup = paste(CMV, Disease, Wait, sep = " | "),
+    hover_text = paste0(
+    "Subject ID: ", SUBJID,
+    "<br>ITE: ", round(ITE, 3),
+    "<br>Patient Age: ", z1,
+    "<br>Donor Age: ", z2,
+    "<br>Patient Sex: ", z3,
+    "<br>Donor Sex: ", z4,
+    "<br>Patient CMV: ", z5,
+    "<br>Donor CMV: ", z6,
+    "<br>Wait Time: ", z7
+    )
+  )
+
+#------------------------------------------------------------------------------
+all.plot <- ggplot(dfite_annotated, aes(x = Age, y = ITE, color = Disease, text = hover_text)) +
+  geom_jitter(alpha = 0.5, width = 0.2, size = 3) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  facet_wrap(~effect_direction, ncol = 1) +
+  labs(
+    title = "Why do some patients benefit while others don't?",
+    subtitle = "Stratified by effect direction and colored by disease group",
+    x = "Age Category",
+    y = "ITE"
+  ) +
+  theme_minimal(base_size = 12)
+
+ggplotly(all.plot, tooltip = "text")
+#----------------------------------------------------------------------
+# Create a combined CMV status variable for clearer faceting
+dfite_annotated_cmv <- dfite_annotated %>%
+  mutate(
+    CMV_combination = case_when(
+      CMV == "CMV+" & z6 == 1 ~ "Patient CMV+ / Donor CMV+",
+      CMV == "CMV+" & z6 == 0 ~ "Patient CMV+ / Donor CMV-",
+      CMV == "CMV-" & z6 == 1 ~ "Patient CMV- / Donor CMV+",
+      CMV == "CMV-" & z6 == 0 ~ "Patient CMV- / Donor CMV-",
+      TRUE ~ "Unknown"
+    ),
+    # Create ordered factor for consistent display
+    CMV_combination = factor(
+      CMV_combination,
+      levels = c(
+        "Patient CMV+ / Donor CMV+",
+        "Patient CMV+ / Donor CMV-",
+        "Patient CMV- / Donor CMV+",
+        "Patient CMV- / Donor CMV-"
+      )
+    )
+  )
+
+# Main plot with all CMV combinations
+cmv_comprehensive_plot <- ggplot(
+  dfite_annotated_cmv, 
+  aes(x = Wait, y = ITE, color = Disease)
+) +
+  geom_jitter(alpha = 0.5, width = 0.2, size = 2.5) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black", linewidth = 0.5) +
+  facet_wrap(
+    ~CMV_combination, 
+    ncol = 2,
+    scales = "free_y"  # Allow y-axis to vary if ITE ranges differ
+  ) +
+  labs(
+    title = "Individual Treatment Effects by CMV Status (Patient/Donor Combinations)",
+    subtitle = "Stratified by all four CMV combinations, colored by disease group",
+    x = "Wait Time Category",
+    y = "Individual Treatment Effect (ITE)",
+    color = "Disease Group"
+  ) +
+  scale_color_viridis_d(option = "D", end = 0.85) +
+  theme_minimal(base_size = 11) +
+  theme(
+    strip.text = element_text(face = "bold", size = 10),
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 13)
+  )
+
+
+#----------------------------------------------------------------------
+
+dfite_annotated_age <- dfite_annotated %>%
+  mutate(
+    donor_age_Level = case_when(
+      z2 < 23 ~ "Low (<23)",
+      z2 >= 23 & z2 < 33 ~ "Middle (23-33)",
+      z2 >= 33 ~ "High (≥33)",
+      TRUE ~ "Unknown"
+    ),
+    donor_age_Level = factor(
+      donor_age_Level,
+      levels = c("Low (<23)", "Middle (23-33)", "High (≥33)")
+    ),
+    
+    Age_combination = paste("Patient", Age, "/ Donor", donor_age_Level),
+    
+    Age_combination = factor(
+      Age_combination,
+      levels = c(
+        "Patient Low (<23) / Donor Low (<23)",
+        "Patient Low (<23) / Donor Middle (23-33)",
+        "Patient Low (<23) / Donor High (≥33)",
+        
+        "Patient Middle (23-33) / Donor Low (<23)",
+        "Patient Middle (23-33) / Donor Middle (23-33)",
+        "Patient Middle (23-33) / Donor High (≥33)",
+        
+        "Patient High (≥33) / Donor Low (<23)",
+        "Patient High (≥33) / Donor Middle (23-33)",
+        "Patient High (≥33) / Donor High (≥33)"
+      )
+    )
+  )
+
+age_comprehensive_plot <- ggplot(
+  dfite_annotated_age, 
+  aes(x = Wait, y = ITE, color = Disease)
+) +
+  geom_jitter(alpha = 0.5, width = 0.2, size = 2.5) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black", linewidth = 0.5) +
+  facet_wrap(
+    ~Age_combination, 
+    ncol = 3,
+    scales = "free_y"
+  ) +
+  labs(
+    title = "Individual Treatment Effects by Age Group (Patient/Donor Combinations)",
+    subtitle = "Stratified by patient and donor age-group combinations, colored by disease group",
+    x = "Wait Time Category",
+    y = "Individual Treatment Effect (ITE)",
+    color = "Disease Group"
+  ) +
+  scale_color_viridis_d(option = "D", end = 0.85) +
+  theme_minimal(base_size = 11) +
+  theme(
+    strip.text = element_text(face = "bold", size = 9),
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 13)
+  )
+
+age_comprehensive_plot
+
+
+
+```
+
+```{r relapse figures}
+inter.plot
+cmv_comprehensive_plot
+density.fig
+depth.fig
+```
+
+
+
+
+
+
+
+```{r fm.d}
+ite.dl <- as.data.frame(ite.fm.d) %>%
+  pivot_longer(cols = everything(), 
+               names_to = "F_M", values_to = "ITE")
+
+overall_median.d <- median(ite.dl$ITE, na.rm = TRUE)
+
+medians.d <- ite.dl %>%
+  group_by(F_M) %>%
+  summarize(med = median(ITE, na.rm = TRUE))
+
+medians.d <- medians.d %>%
+  mutate(
+    label = paste0(
+      "Median = ", round(med, 2))
+    )
+
+density.d.fig <- ggplot(ite.dl, aes(x = ITE)) +
+  geom_density(fill = "gray", alpha = 0.4) +
+  annotate("text",
+           x = overall_median.d,
+           y = 0,
+           label = paste0("Median = ", round(overall_median.d, 2)),
+           vjust = -1,
+           hjust = -0.1,
+           size = 4) +
+  labs(
+    title = "Density Plot of Individualized Treatment Effects",
+    x = "ITE",
+    y = "Density"
+  ) +
+  theme_minimal()
+
+violin.d.fig <- ggplot(ite.dl, aes(x = F_M, y = ITE, fill = F_M)) +
+  geom_violin(trim = FALSE, alpha = 0.6, color = "darkgray") +
+  geom_boxplot(width = 0.1, outlier.shape = NA, alpha = 0.5) +
+  
+  geom_text(data = medians.d,
+            aes(y = med,                  
+                label = label),    
+            vjust = -15,                  
+            hjust = 0.5,                 
+            size = 3,                 
+            color = "black") +
+  
+  labs(
+    title = "Violin Plot of Individualized Treatment Effects",
+    x = "F donor to M patient",
+    y = "Predicted ITE"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5)
+  )
+violin.d.fig
+
+depth.d.fig <- ggplot(depth.fm.d, aes(x = reorder(Variable, -depth.fm.d), y = depth.fm.d)) +
+  geom_bar(stat = "identity", fill = "black") +
+  coord_flip() +
+  labs(
+    title = "Variable Importance by Minimal Depth",
+    x = "Variable",
+    y = "Minimal Depth"
+  ) +
+  theme_minimal(base_size = 13)
+print(depth.fig)
+
+```
+
+
+```{r fm.d plots}
+
+dfite.d <- cbind(ite.fm.d, bmt)
+dfite.d_long <- as.data.frame(dfite.d) %>%
+  pivot_longer(cols = c(`y1-y0`), 
+               names_to = "F_M", values_to = "ITE")
+
+wait_breaks <- quantile(bmt$z7, probs = seq(0, 1, 1/3), na.rm = TRUE)
+
+age_breaks <- quantile(bmt$z1, probs = seq(0, 1, 1/3), na.rm = TRUE)
+
+dfite.d_long <- dfite.d_long %>%
+  mutate(
+    wait_Level = case_when(
+      z7 < 120 ~ "Low (<120)",
+      z7 >= 120 & z7 < 210 ~ "Middle (120–210)",
+      z7 >= 210 ~ "High (≥210)"
+    ),
+    wait_Level = factor(wait_Level, 
+                         levels = c("Low (<120)", "Middle (120–210)", "High (≥210)")),
+    
+    
+    age_Level = case_when(
+      z1 < 23 ~ "<23",
+      z1 >= 23 & z1 < 33 ~ "23-33",
+      z1 >= 33 ~ "≥33"
+    ),
+    age_Level = factor(age_Level, 
+                         levels = c("<23", "23-33", "≥33")),
+  
+  
+  F_M = factor(F_M)
+  
+  )
+
+#---------------------------------------------------------------------------------
+
+# Create a version with multiple covariate columns for faceting
+dfite.d_multi <- dfite.d_long %>%
+  mutate(
+    CMV = factor(z5, labels = c("CMV-", "CMV+")),
+    Disease = factor(group,
+                     levels = c(1, 2, 3),
+                     labels = c("ALL", "AML Low Risk", "AML High Risk")),
+    Wait = wait_Level,
+    Age = age_Level
+  )
+
+# Facet by two variables to see interactions
+inter.d.plot <- ggplot(dfite.d_multi, aes(x = CMV, y = ITE, color = Wait)) +
+  geom_jitter(alpha = 0.4, width = 0.2, size = 2) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray40") +
+  facet_wrap(~Disease, ncol = 3) +
+  labs(
+    x = "Patient CMV Status",
+    y = "Individual Treatment Effect (ITE)",
+    color = "Wait Time",
+    title = "Individual Treatment Effects by Patient CMV Status and Disease Group",
+    subtitle = "Stratified by disease type, colored by wait time tercile"
+  ) +
+  scale_color_viridis_d(option = "D", end = 0.85) +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom",
+        plot.title = element_text(face = "bold"))
+
+interage.d.plot <- ggplot(dfite.d_multi, aes(x = Age, y = ITE, color = Wait)) +
+  geom_jitter(alpha = 0.4, width = 0.2, size = 2) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray40") +
+  facet_wrap(~Disease, ncol = 3) +
+  labs(
+    x = "Patient Age Group (Years)",
+    y = "Individual Treatment Effect (ITE)",
+    color = "Wait Time",
+    title = "Individual Treatment Effects by Patient Age Group and Disease Group",
+    subtitle = "Stratified by disease type, colored by wait time tercile"
+  ) +
+  scale_color_viridis_d(option = "D", end = 0.85) +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom",
+        plot.title = element_text(face = "bold"))
+
+
+#-----------------------------------------------------------------------
+
+# Focus on specific subgroups of interest
+# For example: CMV+ patients with beneficial vs harmful effects
+
+dfite.d_annotated <- dfite.d_multi %>%
+  mutate(
+    effect_direction = case_when(
+      ITE < -0.1 ~ "Beneficial (ITE < -0.1)",
+      ITE > 0.1 ~ "Harmful (ITE > 0.1)",
+      TRUE ~ "Neutral"
+    ),
+    subgroup = paste(CMV, Disease, Wait, sep = " | "),
+    hover_text = paste0(
+    "Subject ID: ", SUBJID,
+    "<br>ITE: ", round(ITE, 3),
+    "<br>Patient Age: ", z1,
+    "<br>Donor Age: ", z2,
+    "<br>Patient Sex: ", z3,
+    "<br>Donor Sex: ", z4,
+    "<br>Patient CMV: ", z5,
+    "<br>Donor CMV: ", z6,
+    "<br>Wait Time: ", z7
+    )
+  )
+
+#------------------------------------------------------------------------------
+all.d.plot <- ggplot(dfite.d_annotated, aes(x = Age, y = ITE, color = Disease, text = hover_text)) +
+  geom_jitter(alpha = 0.5, width = 0.2, size = 3) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  facet_wrap(~effect_direction, ncol = 1) +
+  labs(
+    title = "Why do some patients benefit while others don't?",
+    subtitle = "Stratified by effect direction and colored by disease group",
+    x = "Age Category",
+    y = "ITE"
+  ) +
+  theme_minimal(base_size = 12)
+
+ggplotly(all.d.plot, tooltip = "text")
+#----------------------------------------------------------------------
+
+# Create a combined CMV status variable for clearer faceting
+dfite.d_annotated_cmv <- dfite.d_annotated %>%
+  mutate(
+    CMV_combination = case_when(
+      CMV == "CMV+" & z6 == 1 ~ "Patient CMV+ / Donor CMV+",
+      CMV == "CMV+" & z6 == 0 ~ "Patient CMV+ / Donor CMV-",
+      CMV == "CMV-" & z6 == 1 ~ "Patient CMV- / Donor CMV+",
+      CMV == "CMV-" & z6 == 0 ~ "Patient CMV- / Donor CMV-",
+      TRUE ~ "Unknown"
+    ),
+    # Create ordered factor for consistent display
+    CMV_combination = factor(
+      CMV_combination,
+      levels = c(
+        "Patient CMV+ / Donor CMV+",
+        "Patient CMV+ / Donor CMV-",
+        "Patient CMV- / Donor CMV+",
+        "Patient CMV- / Donor CMV-"
+      )
+    )
+  )
+
+# Main plot with all CMV combinations
+cmv.d_comprehensive_plot <- ggplot(
+  dfite.d_annotated_cmv, 
+  aes(x = Wait, y = ITE, color = Disease)
+) +
+  geom_jitter(alpha = 0.5, width = 0.2, size = 2.5) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black", linewidth = 0.5) +
+  facet_wrap(
+    ~CMV_combination, 
+    ncol = 2,
+    scales = "free_y"  # Allow y-axis to vary if ITE ranges differ
+  ) +
+  labs(
+    title = "Individual Treatment Effects by CMV Status (Patient/Donor Combinations)",
+    subtitle = "Stratified by all four CMV combinations, colored by disease group",
+    x = "Wait Time Category",
+    y = "Individual Treatment Effect (ITE)",
+    color = "Disease Group"
+  ) +
+  scale_color_viridis_d(option = "D", end = 0.85) +
+  theme_minimal(base_size = 11) +
+  theme(
+    strip.text = element_text(face = "bold", size = 10),
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 13)
+  )
+```
+
+
+```{r death figs}
+density.d.fig
+depth.d.fig
+inter.d.plot
+cmv.d_comprehensive_plot
+```
+
+```{r combo violin}
+library(ggplot2)
+library(patchwork)
+
+violin.fig <- ggplot(ite.l, aes(x = F_M, y = ITE)) +
+  geom_violin(fill = "gray70", trim = FALSE, alpha = 0.6, color = "black") +
+  geom_boxplot(width = 0.1, outlier.shape = NA, alpha = 0.5) +
+  geom_text(
+    data = medians,
+    aes(y = med, label = label),
+    vjust = -20,
+    hjust = 0.7,
+    size = 3,
+    color = "black"
+  ) +
+  labs(
+    title = "Relapse",
+    x = "F donor to M patient",
+    y = "Predicted ITE"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5)
+  )
+
+violin.d.fig <- ggplot(ite.dl, aes(x = F_M, y = ITE)) +
+  geom_violin(fill = "gray70", trim = FALSE, alpha = 0.6, color = "black") +
+  geom_boxplot(width = 0.1, outlier.shape = NA, alpha = 0.5) +
+  geom_text(
+    data = medians.d,
+    aes(y = med, label = label),
+    vjust = 20,
+    hjust = 0.7,
+    size = 3,
+    color = "black"
+  ) +
+  labs(
+    title = "Overall Survival",
+    x = "F donor to M patient",
+    y = "Predicted ITE"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5)
+  )
+
+y_all <- c(ite.l$ITE, ite.dl$ITE)
+y_rng <- range(y_all, na.rm = TRUE)
+y_pad <- 0.12 * diff(y_rng)   # 12% padding
+
+shared_ylim <- c(y_rng[1] - y_pad, y_rng[2] + y_pad)
+
+violin.fig <- violin.fig + coord_cartesian(ylim = shared_ylim)
+violin.d.fig <- violin.d.fig + coord_cartesian(ylim = shared_ylim)
+
+combined_violin <- violin.fig + violin.d.fig +
+  plot_layout(ncol = 2) +
+  plot_annotation(title = "Comparison of ITE Distributions by Outcome")
+
+combined_violin
+```
+
+```{r tables}
+
+
+library(purrr)
+library(stringr)
+
+library(gt)
+
+# variable labels: original name + description
+var_labels <- c(
+  group = "group: Disease Group",
+  t1 = "t1: Time To Death Or On Study Time",
+  t2 = "t2: Disease Free Survival Time",
+  d1 = "d1: Death Indicator",
+  d2 = "d2: Relapse Indicator",
+  d3 = "d3: Disease Free Survival Indicator",
+  ta = "ta: Time To Acute Graft-Versus-Host Disease",
+  da = "da: Acute GVHD Indicator",
+  tc = "tc: Time To Chronic Graft-Versus-Host Disease",
+  dc = "dc: Chronic GVHD Indicator",
+  tp = "tp: Time To Platelet Recovery",
+  dp = "dp: Platelet Recovery Indicator",
+  z1 = "z1: Patient Age In Years",
+  z2 = "z2: Donor Age In Years",
+  z3 = "z3: Patient Sex",
+  z4 = "z4: Donor Sex",
+  z5 = "z5: Patient CMV Status",
+  z6 = "z6: Donor CMV Status",
+  z7 = "z7: Waiting Time to Transplant In Days",
+  z8 = "z8: FAB",
+  z9 = "z9: Hospital",
+  z10 = "z10: MTX Used as GVHD Prophylaxis"
+)
+
+# value labels for categorical variables
+value_labels <- list(
+  group = c(
+    `1` = "1-ALL",
+    `2` = "2-AML Low Risk",
+    `3` = "3-AML High Risk"
+  ),
+  d1 = c(`0` = "0-Alive", `1` = "1-Dead"),
+  d2 = c(`0` = "0-Disease Free", `1` = "1-Relapsed"),
+  d3 = c(`0` = "0-Alive Disease Free", `1` = "1-Dead Or Relapsed"),
+  da = c(`0` = "0-Never Developed Acute GVHD", `1` = "1-Developed Acute GVHD"),
+  dc = c(`0` = "0-Never Developed Chronic GVHD", `1` = "1-Developed Chronic GVHD"),
+  dp = c(`0` = "0-Platelets Never Returned to Normal", `1` = "1-Platelets Returned To Normal"),
+  z3 = c(`0` = "0-Female", `1` = "1-Male"),
+  z4 = c(`0` = "0-Female", `1` = "1-Male"),
+  z5 = c(`0` = "0-CMV Negative", `1` = "1-CMV Positive"),
+  z6 = c(`0` = "0-CMV Negative", `1` = "1-CMV Positive"),
+  z8 = c(`0` = "0-Otherwise", `1` = "1-FAB Grade 4 Or 5 and AML"),
+  z9 = c(
+    `1` = "1-The Ohio State University",
+    `2` = "2-Alferd",
+    `3` = "3-St. Vincent",
+    `4` = "4-Hahnemann"
+  ),
+  z10 = c(`0` = "0-No", `1` = "1-Yes")
+)
+
+continuous_vars <- c("t1", "t2", "ta", "tc", "tp", "z1", "z2", "z7")
+categorical_vars <- c("group", "d1", "d2", "d3", "da", "dc", "dp", "z3", "z4", "z5", "z6", "z8", "z9", "z10")
+
+# continuous: one row with mean (SD)
+summarize_continuous <- function(data, var) {
+  x <- data[[var]]
+
+  tibble(
+    Variable = var_labels[[var]],
+    Statistic = sprintf("%.2f (%.2f)", mean(x, na.rm = TRUE), sd(x, na.rm = TRUE))
+  )
+}
+
+# categorical: header row + indented level rows with n (%)
+summarize_categorical <- function(data, var) {
+  x <- data[[var]]
+  x_chr <- as.character(x)
+  tab <- table(x_chr, useNA = "no")
+  pct <- prop.table(tab) * 100
+
+  level_tbl <- tibble(
+    Variable = paste0("\u00A0\u00A0\u00A0", recode(names(tab), !!!value_labels[[var]])),
+    Statistic = sprintf("%s (%.1f%%)", format(as.integer(tab), big.mark = ","), as.numeric(pct))
+  )
+
+  bind_rows(
+    tibble(
+      Variable = var_labels[[var]],
+      Statistic = ""
+    ),
+    level_tbl
+  )
+}
+
+# build table
+table_data <- bind_rows(
+  map_dfr(continuous_vars, \(v) summarize_continuous(bmt, v)),
+  map_dfr(categorical_vars, \(v) summarize_categorical(bmt, v))
+)
+
+n_total <- nrow(bmt)
+
+header_rows <- c(
+  "group: Disease Group",
+  "d1: Death Indicator",
+  "d2: Relapse Indicator",
+  "d3: Disease Free Survival Indicator",
+  "da: Acute GVHD Indicator",
+  "dc: Chronic GVHD Indicator",
+  "dp: Platelet Recovery Indicator",
+  "z3: Patient Sex",
+  "z4: Donor Sex",
+  "z5: Patient CMV Status",
+  "z6: Donor CMV Status",
+  "z8: FAB",
+  "z9: Hospital",
+  "z10: MTX Used as GVHD Prophylaxis"
+)
+
+table_data_fmt <- table_data %>%
+  mutate(
+    is_header = Variable %in% header_rows,
+    Stat = if_else(is_header, "", Statistic),
+    Variable = case_when(
+      is_header ~ paste0("\\addlinespace[0.3em]\\textbf{", Variable, "}"),
+      grepl("^[0-9]+-", Variable) ~ paste0("\\hspace{1em}", Variable),
+      TRUE ~ Variable
+    )
+  ) %>%
+  select(Variable, Stat)
+
+kbl(
+  table_data_fmt,
+  format = "latex",
+  booktabs = TRUE,
+  escape = FALSE,
+  col.names = c("Variable", paste0("N = ", n_total)),
+  align = c("p{9.5cm}", "r"),
+  linesep = ""
+) |>
+  kable_styling(
+    latex_options = "hold_position",
+    full_width = FALSE,
+    font_size = 9
+  ) |>
+  row_spec(0, bold = TRUE) |>
+  footnote(
+    general = "n (\\%) ; Mean (SD)",
+    general_title = "",
+    threeparttable = TRUE,
+    escape = FALSE
+  )
+
+kbl(
+  table_data,
+  format = "latex",
+  booktabs = TRUE,
+  escape = FALSE,
+  col.names = c("Variable", paste0("N = ", n_total)),
+  align = c("l", "|l"),
+  linesep = ""
+) |>
+  kable_styling(
+    latex_options = c("hold_position"),
+    full_width = FALSE
+  ) |>
+  footnote(
+    general = "n (\\%) ; Mean (SD)",
+    general_title = "",
+    threeparttable = TRUE,
+    escape = FALSE
+  )
+
+
+```
+
+
+
+

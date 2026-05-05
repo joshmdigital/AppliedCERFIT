@@ -1,0 +1,788 @@
+---
+title: "Smoking&BMI"
+author: "Joshua Moffat"
+date: "2025-09-30"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r readin}
+library(haven)
+
+# Body Measures
+bmx <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/BMX_L.xpt')
+
+#Smoking
+smq <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/SMQ_L.xpt')
+
+#Weight History
+whq <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/WHQ_L.xpt')
+
+#Physical Activity
+paq <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/PAQ_L.xpt')
+
+#Alcohol Use
+alq <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/ALQ_L.xpt')
+
+#Demographics
+demo <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/DEMO_L.xpt')
+
+#Blood Pressure & Cholesterol
+bpq <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/BPQ_L.xpt')
+
+#Diabetes
+diq <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/DIQ_L.xpt')
+
+#Medical Conditions 
+mcq <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/MCQ_L.xpt')
+
+#Diet Behavior and Nutrition
+dbq <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/DBQ_L.xpt')
+
+#CRP C-reactive protein
+crp <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/HSCRP_L.xpt')
+
+#Sleep 
+slp <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/SLQ_L.xpt')
+
+#Nutrition D1
+nud1 <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/DR1TOT_L.xpt')
+
+nud2 <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/DR2TOT_L.xpt')
+```
+
+```{r datafunc}
+library(dplyr)
+library(purrr)
+
+# merge all datasets by subject ID
+merge_by_id <- function(datasets, id_var = "SEQN") {
+  reduce(datasets, full_join, by = id_var)
+}
+
+# Subset to subjects with complete data for given variables,
+# and keep only those variables (plus the ID)
+subset_complete <- function(data, vars, id_var = "SEQN") {
+  data %>%
+    select(all_of(c(id_var, vars)))
+    
+}
+
+na_filter <- function(data, vars)  {
+   data %>%
+    filter(if_all(all_of(vars), ~ !is.na(.)))
+}
+
+
+factorize_vars <- function(data, vars) {
+  data %>%
+    mutate(across(all_of(vars), as.factor))
+}
+
+clean_drop <- function(data) {
+  # Dictionary of codes to drop
+  special_codes <- list(
+    DMDEDUC2 = 9,
+    DMDMARTZ = c(77, 99),
+    ALQ151   = c(7, 9),
+    BPQ020   = c(7, 9),
+    BPQ080   = c(7, 9),
+    DIQ010   = c(7, 9),
+    SMQ020   = c(7, 9),
+    PAD680   = c(7777, 9999),
+    WHD050   = c(7777, 9999),
+    WHQ070   = c(7, 9),
+    SMD650   = c(999),
+    PAD790Q  = c(7777, 9999),
+    WHD020   = c(7777, 9999),
+    DBQ940   = 9
+  )
+  
+  cleaned <- data
+  dropped <- data[0, ]  
+  
+  # Loop through variables and remove rows with special codes
+  for (var in names(special_codes)) {
+    if (var %in% names(cleaned)) {
+      bad_rows <- cleaned[[var]] %in% special_codes[[var]]
+      if (any(bad_rows)) {
+        dropped <- rbind(dropped, cleaned[bad_rows, ])
+        cleaned <- cleaned[!bad_rows, ]
+      }
+    }
+  }
+  
+  return(list(cleaned = cleaned, dropped = dropped))
+}
+
+```
+
+Variables to use:
+"RIAGENDR", "RIDAGEYR", "RIDRETH3", "DMDBORN4", "DMDEDUC2", "DMDMARTZ", "INDFMPIR",
+"ALQ151", "BMXBMI", "BPQ020", "BPQ080", "DIQ010", "SMQ020", "PAD680", "WHD050", "WHQ070",
+"SMQ040", "SMD650", "SLD012", "SLD013", "DR1TKCAL", "DR2TKCAL"
+
+
+Variables as factor(categorical)
+"RIAGENDR", "RIDRETH3", "DMDBORN4", "DMDEDUC2", "DMDMARTZ", "ALQ151", "BPQ020",
+"BPQ080", "DIQ010", "SMQ020", "WHQ070", "SMQ040"
+
+Variables to remove "don't know"/"refused" values:
+DMDEDUC2 - 9
+DMDMARTZ - 77, 99
+
+ALQ151 - 7, 9
+
+BPQ020 - 7, 9
+BPQ080 - 7, 9
+
+DIQ010 - 7, 9
+
+SMQ020 - 7,9
+
+PAD680 - 7777, 9999
+
+WHD050 - 7777, 9999
+WHQ070 - 7, 9
+
+SMD650 - 999
+
+```{r subset}
+all <- merge_by_id(list(alq, bmx, bpq, demo, diq, paq, smq, whq, slp, nud1, nud2), id_var = "SEQN")
+
+ varsToUse<- c("RIAGENDR", "RIDAGEYR", "RIDRETH3", "DMDBORN4", "DMDEDUC2", "DMDMARTZ", "INDFMPIR",
+ "ALQ151", "BMXBMI", "BPQ020", "BPQ080", "DIQ010", "SMQ020", "PAD680", "WHD050", "WHQ070","SMQ040", "SMD650", "SLD012", "SLD013", "DR1TKCAL", "DR2TKCAL")
+
+
+ varsneNA <-  c("RIAGENDR", "RIDAGEYR", "RIDRETH3", "DMDBORN4", "DMDEDUC2", "DMDMARTZ", "INDFMPIR",
+ "ALQ151", "BMXBMI", "BPQ020", "BPQ080", "DIQ010", "SMQ020", "PAD680", "WHD050", "WHQ070", "SLD012", "SLD013",
+ "DR1TKCAL", "DR2TKCAL")
+
+ varsFactors <- c("RIAGENDR", "RIDRETH3", "DMDBORN4", "DMDEDUC2", "DMDMARTZ", "ALQ151", "BPQ020",
+ "BPQ080", "DIQ010", "SMQ020", "WHQ070", "SMQ040")
+
+#varsFactors <- c( "RIDRETH3", "DMDEDUC2", "SMQ020", "SMQ040")
+
+analysis <- subset_complete(all, varsToUse)
+analysis.na <- na_filter(analysis, varsneNA)
+
+analysis2 <- clean_drop(analysis.na)
+nhanes.clean <- factorize_vars(analysis2$cleaned, varsFactors)
+analysis_dropped <- analysis2$dropped
+
+nhanes.clean$smklevel <- NA 
+nhanes.clean <- nhanes.clean %>%
+  mutate(smklevel = case_when(
+    SMQ020 == 2               ~ "Never",
+    SMQ020 == 1 & SMQ040 == 3 ~ "Former",
+    SMQ020 == 1 & SMQ040 == 2 ~ "Current",
+    SMQ020 == 1 & SMQ040 == 1 ~ "Current"
+  ))
+
+nhanes.clean$smklevel <- factor(nhanes.clean$smklevel, 
+                levels = c("Never", "Former", "Current"))
+
+
+nhanes.clean <- nhanes.clean %>%
+  mutate(smkbin = case_when(
+    SMQ020 == 2 ~ 0,
+    SMQ020 == 1 ~ 1))
+
+#nhanes.clean$smkbin <- factor(nhanes.clean$smkbin)
+
+#df_subset <- as.data.frame(nhanes.clean, check.names = FALSE) 
+
+df <- as.data.frame(nhanes.clean, check.names = FALSE) 
+
+```
+
+
+```{r subset}
+all <- merge_by_id(list(alq, bmx, bpq, demo, diq, paq, smq, whq, mcq, dbq, crp,slp, nud1, nud2), id_var = "SEQN")
+
+varsToUse<- c("RIAGENDR", "RIDAGEYR", "RIDRETH3", "DMDEDUC2", "DMDMARTZ", "INDFMPIR", "BMXBMI", "BPQ020", "BPQ080", "SMQ020", "PAD680", "WHQ070", "LBXHSCRP", "SLD012", "DR1TFIBE", "DR1TSUGR", "DR1TATOC", "DR1TVARA", "DR1TVC", "DR1TMAGN", "DR1TSODI", "DR1TSFAT", "DR1TCHOL", "DR1TATOA", "DR1TFOLA", "DR2TFIBE", "DR2TSUGR", "DR2TATOC", "DR2TVARA", "DR2TVC", "DR2TMAGN", "DR2TSODI", "DR2TSFAT", "DR2TCHOL", "DR2TATOA", "DR2TFOLA", "DMDBORN4","ALQ151","DIQ010","PAD680","WHD050", "WHQ070","SMQ040","SMD650")
+
+varsneNA <-  c("RIAGENDR", "RIDAGEYR", "RIDRETH3", "DMDEDUC2", "DMDMARTZ", "INDFMPIR", "BMXBMI", "BPQ020", "BPQ080", "SMQ020", "PAD680", "WHQ070", "LBXHSCRP","SLD012", "DR1TFIBE","DR1TSUGR", "DR1TATOC", "DR1TVARA", "DR1TVC", "DR1TMAGN", "DR1TSODI", "DR1TSFAT", "DR1TCHOL", "DR1TATOA", "DR1TFOLA", "DR2TFIBE", "DR2TSUGR", "DR2TATOC", "DR2TVARA", "DR2TVC", "DR2TMAGN", "DR2TSODI", "DR2TSFAT", "DR2TCHOL", "DR2TATOA", "DR2TFOLA", "DMDBORN4","ALQ151","DIQ010","PAD680","WHD050", "WHQ070")
+
+varsFactors <- c("RIAGENDR", "RIDRETH3", "DMDEDUC2", "DMDMARTZ", "BPQ020",
+"BPQ080", "SMQ020", "WHQ070", "DMDBORN4", "DIQ010","SMQ040")
+
+analysis <- subset_complete(all, varsToUse)
+analysis.na <- na_filter(analysis, varsneNA)
+
+analysis2 <- clean_drop(analysis.na)
+nhanes.clean <- factorize_vars(analysis2$cleaned, varsFactors)
+analysis_dropped <- analysis2$dropped
+
+
+nhanes.clean$smklevel <- NA 
+nhanes.clean <- nhanes.clean %>%
+  mutate(smklevel = case_when(
+    SMQ020 == 2               ~ "Never",
+    SMQ020 == 1 & SMQ040 == 3 ~ "Former",
+    SMQ020 == 1 & SMQ040 == 2 ~ "Current",
+    SMQ020 == 1 & SMQ040 == 1 ~ "Current"
+  ))
+
+nhanes.clean$smklevel <- factor(nhanes.clean$smklevel, 
+                levels = c("Never", "Former", "Current"))
+
+#-------------------------------------------------------------------------------
+df <- as.data.frame(nhanes.clean, check.names = FALSE) 
+
+# dfcrp <- df %>%
+#   filter(LBXHSCRP <= 10)
+#-------------------------------------------------------------------------------
+
+nutrients <- c("TFIBE", "TSUGR", "TATOC", "TVARA", "TVC", "TMAGN", "TSODI", "TSFAT", "TCHOL", "TATOA", "TFOLA")
+
+for (nutrient in nutrients) {
+  var_name <- paste0(nutrient, "_avg")
+  day1_var <- paste0("DR1", nutrient)
+  day2_var <- paste0("DR2", nutrient)
+  
+  df[[var_name]] <- rowMeans(df[, c(day1_var, day2_var)], na.rm = TRUE)
+}
+
+#-------------------------------------------------------------------------------
+# decile_breaks <- quantile(dfcrp$TFIBE_avg, probs = seq(0, 1, 1/6), na.rm = TRUE)
+# 
+# combined_breaks <- c(0.35, 8.95, 15.0999, 23.7, 82.65)
+# 
+# dfcrp$fiber_Bin <- cut(
+#   dfcrp$TFIBE_avg,
+#   breaks = unique(decile_breaks), 
+#   include.lowest = TRUE,
+#   labels = FALSE 
+# )
+# dfcrp$fiber_Bin <- factor(dfcrp$fiber_Bin ,ordered = TRUE)
+
+```
+
+
+```{r fit}
+library(CERFIT)
+set.seed(74)
+fit <- CERFIT(BMXBMI ~ LBXHSCRP + RIAGENDR + RIDAGEYR + RIDRETH3 + DMDEDUC2 + DMDMARTZ + INDFMPIR + BPQ020 + BPQ080 + WHQ070 + PAD680 + SLD012 + TSUGR_avg + TATOC_avg + TVARA_avg + TVC_avg + TMAGN_avg + TSODI_avg + TSFAT_avg + TCHOL_avg + TATOA_avg + TFOLA_avg + TFIBE_avg + DMDBORN4 + ALQ151 + DIQ010 + WHD050 + WHQ070 | smklevel,
+              method = "observational",
+              PropForm = "CBPS",
+              data = df,
+              mtry = 14,
+              oob = TRUE,
+              ntrees = 800)
+
+depth <- MinDepth(fit)
+depth <- as.data.frame(depth)
+depth$Variable <- rownames(depth)
+
+var_labels <- c(
+  RIAGENDR   = "Sex",
+  RIDAGEYR   = "Age in Years at Screening",
+  RIDRETH3   = "Race",
+  DMDEDUC2   = "Education Level",
+  DMDMARTZ   = "Marital Status",
+  INDFMPIR   = "Ratio of Family Income to Poverty",
+  BMXBMI     = "Body Mass Index (kg/m^2)",
+  BPQ020     = "Ever Told You Had High Blood Pressure",
+  BPQ080     = "Doctor Told You - High Cholesterol Level",
+  SMQ020     = "Smoked at Least 100 Cigarettes in Life",
+  PAD680     = "Minutes Sedentary Activity",
+  WHQ070     = "Tried to Lose Weight in Past Year",
+  LBXHSCRP   = "HS C-Reactive Protein (mg/L)",
+  SLD012     = "Sleep Hours - Weekdays or Workdays",
+  TFIBE_avg  = "Fiber Intake (gm)",
+  TSUGR_avg  = "Sugar Intake (gm)",
+  TATOC_avg  = "Vitamin E Intake (mg)",
+  TVARA_avg  = "Vitamin A Intake (mcg)",
+  TVC_avg    = "Vitamin C Intake (mg)",
+  TMAGN_avg  = "Magnesium Intake (mg)",
+  TSODI_avg  = "Sodium Intake (mg)",
+  TSFAT_avg  = "Total Saturated Fatty Acids Intake (gm)",
+  TCHOL_avg  = "Cholesterol Intake (mg)",
+  TATOA_avg  = "Added Vitamin E Intake (mg)",
+  TFOLA_avg  = "Total Folate Intake (mcg)",
+  DMDBORN4   = "Country of Birth",
+  ALQ151     = "Ever Have 4/5 or More Drinks Every Day",
+  DIQ010     = "Doctor Told You Have Diabetes",
+  WHD050     = "Self-reported Weight - 1 yr ago"
+)
+
+depth$Variable <- var_labels[depth$Variable]
+
+
+```
+
+```{r predict}
+
+res<-predict(fit, type = "response")
+ite<-predict(fit, type = "ITE")
+
+```
+
+
+```{r mse}
+#' Combine predicted responses with data and calculate MSE
+#'
+#' @param data Original data frame (must include the treatment variable)
+#' @param predictions Matrix or data.frame of predicted responses where
+#'        each column corresponds to a treatment and each row to an observation.
+#'        Column names should match treatment levels.
+#' @param trt_var Character string: name of treatment variable in `data`
+#' @param y_var Character string: name of response variable in `data`
+#'
+#' @return A list with combined data and overall as well as per-treatment MSE
+#'
+combine_and_calc_mse <- function(data, predictions, trt_var, y_var) {
+  
+  # Ensure treatments align
+  trt_levels <- unique(data[[trt_var]])
+  if (!all(trt_levels %in% colnames(predictions))) {
+    stop("Treatment levels and prediction columns do not match.")
+  }
+  
+  # Combine data and predictions
+  df_combined <- cbind(data, predictions)
+  
+  # Extract the predicted response for the actual treatment each subject received
+  df_combined$pred_used <- mapply(function(pred_row, trt) pred_row[[trt]], 
+                                  split(df_combined[, colnames(predictions)], seq_len(nrow(df_combined))), 
+                                  df_combined[[trt_var]])
+  
+  # Calculate residuals and MSE
+  df_combined$residual <- df_combined[[y_var]] - df_combined$pred_used
+  mse_overall <- mean(df_combined$residual^2, na.rm = TRUE)
+  
+  # MSE per treatment level
+  mse_by_treatment <- tapply(df_combined$residual^2, df_combined[[trt_var]], mean, na.rm = TRUE)
+  
+  return(list(
+    combined_data = df_combined,
+    mse_overall = mse_overall,
+    mse_by_treatment = mse_by_treatment
+  ))
+}
+
+colnames(res) <- levels(df$smklevel)
+
+
+mseresult <- combine_and_calc_mse(
+  data = df,
+  predictions = res,   # columns = treatment1, treatment2, ...
+  trt_var = "smklevel",
+  y_var = "BMXBMI"
+)
+
+re <- mseresult$combined_data
+
+
+sqrt(mseresult$mse_overall)
+sqrt(mseresult$mse_by_treatment)
+
+```
+
+```{r median se}
+median_se <- function(data, predictions, trt_var, y_var) {
+  
+ 
+  trt_levels <- unique(data[[trt_var]])
+  if (!all(trt_levels %in% colnames(predictions))) {
+    stop("Treatment levels and prediction columns do not match.")
+  }
+  
+ 
+  df_combined <- cbind(data, predictions)
+  
+  
+  df_combined$pred_used <- mapply(function(pred_row, trt) pred_row[[trt]], 
+                                  split(df_combined[, colnames(predictions)], seq_len(nrow(df_combined))), 
+                                  df_combined[[trt_var]])
+  
+ 
+  df_combined$residual <- df_combined[[y_var]] - df_combined$pred_used
+  median_se_overall <- median(df_combined$residual^2, na.rm = TRUE)
+  
+  
+  median_se_by_treatment <- tapply(df_combined$residual^2, df_combined[[trt_var]], median, na.rm = TRUE)
+  
+  return(list(
+    combined_data = df_combined,
+    median_se_overall = median_se_overall,
+    median_se_by_treatment = median_se_by_treatment
+  ))
+}
+
+colnames(res) <- levels(df$smklevel)
+median.se <- median_se(
+  data = df,
+  predictions = res,   
+  trt_var = "smklevel",
+  y_var = "BMXBMI"
+)
+medianse.df <- median.se$combined_data
+sqrt(median.se$median_se_overall)
+sqrt(median.se$median_se_by_treatment)
+
+```
+
+
+```{r plot}
+
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+
+r.df <- as.data.frame(res, check.names = FALSE) 
+
+r.long <- pivot_longer(r.df, 
+                        cols = everything(),
+                        names_to = "treatment", 
+                        values_to = "bmi")
+
+
+ggplot(r.long, aes(x = treatment, y = bmi)) +
+  geom_violin(trim = FALSE, fill = "lightblue", color = "darkblue") +
+  geom_boxplot(width = 0.1, outlier.shape = NA) + 
+  labs(title = "Violin Plot of Predictied BMI distribution by Smoking Status",
+       x = "Smoking Status",
+       y = "BMI")
+
+#-------------------------------------------------------------------------------
+
+# Compute summary stats for each group
+stats <- r.long %>%
+  group_by(treatment) %>%
+  summarise(
+    mean_bmi = mean(bmi, na.rm = TRUE),
+    median_bmi = median(bmi, na.rm = TRUE)
+  )
+
+# Compute difference vs. baseline (assume "Never" = Y1)
+baseline_mean <- stats$mean_bmi[stats$treatment == "Never"]
+baseline_median <- stats$median_bmi[stats$treatment == "Never"]
+
+stats <- stats %>%
+  mutate(
+    mean_diff = mean_bmi - baseline_mean,
+    median_diff = median_bmi - baseline_median,
+    label = paste0(
+      "Mean = ", round(mean_bmi, 1),
+      "\nMed = ", round(median_bmi, 1),
+      "\nΔMean = ", sprintf("%.1f", mean_diff)
+    )
+  )
+
+
+bmi.fig <- ggplot(r.long, aes(x = treatment, y = bmi)) +
+  geom_violin(trim = FALSE, fill = "lightblue", color = "darkblue") +
+  geom_boxplot(width = 0.1, outlier.shape = NA) +
+  geom_text(
+    data = stats,
+    aes(x = treatment, y = max(r.long$bmi) * 0.95, label = label),
+    color = "black", size = 3.5, hjust = 1.1, fontface = "italic"
+  ) +
+  labs(
+    title = "Violin Plot of Predicted BMI Distribution by Smoking Status",
+    x = "Smoking Status",
+    y = "Predicted BMI"
+  ) +
+  theme_minimal(base_size = 13)
+
+#-------------------------------------------------------------------------------
+
+ite_long <- as.data.frame(ite) %>%
+  pivot_longer(
+    cols = c(`y2-y1`, `y3-y1`),
+    names_to = "Contrast",
+    values_to = "ITE"
+  ) %>%
+  mutate(
+    Contrast = factor(
+      recode(Contrast,
+        `y2-y1` = "Former",
+        `y3-y1` = "Current"
+      ),
+      levels = c("Former", "Current")
+    )
+  )
+
+#-------------------------------------------------------------------------------
+ggplot(ite_long, aes(x = ITE, fill = Contrast)) +
+  geom_density(alpha = 0.4) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  labs(title = "Distribution of Individualized Treatment Effects",
+       x = "Predicted ITE (Treatment – Baseline)",
+       y = "Density") +
+  theme_minimal()
+
+# Compute the median ITE for each contrast
+medians <- ite_long %>%
+  group_by(Contrast) %>%
+  summarize(med = median(ITE, na.rm = TRUE))
+
+# Plot with density and median lines per contrast
+den.fig <- ggplot(ite_long, aes(x = ITE, fill = Contrast)) +
+  geom_density(alpha = 0.4) +
+  geom_vline(data = medians, aes(xintercept = med, color = Contrast),
+             linetype = "dashed", linewidth = 1) +
+  labs(
+    title = "Distribution of Individualized Treatment Effects",
+    x = "Predicted ITE (Treatment – Baseline)",
+    y = "Density"
+  ) +
+  theme_minimal()
+
+den.fig <- ggplot(ite_long, aes(x = ITE, fill = Contrast)) +
+  geom_density(alpha = 0.4) +
+  geom_vline(
+    data = medians,
+    aes(
+      xintercept = med,
+      color = Contrast,
+      linetype = "Median"
+    ),
+    linewidth = 1
+  ) +
+ scale_linetype_manual(name = NULL, values = c("Median" = "dashed")) +
+  guides(
+    linetype = guide_legend(override.aes = list(linewidth = 1.5))
+  ) +
+  labs(
+    title = "Distribution of Individualized Treatment Effects",
+    x = "Predicted ITE (Treatment – Baseline)",
+    y = "Density"
+  ) +
+  theme_minimal()
+
+den.fig <- ggplot(ite_long, aes(x = ITE, fill = Contrast)) +
+  geom_density(alpha = 0.4) +
+  geom_vline(
+    data = medians,
+    aes(
+      xintercept = med,
+      color = Contrast,
+      linetype = "Median"
+    ),
+    linewidth = 1
+  ) +
+  scale_linetype_manual(name = NULL, values = c("Median" = "dashed")) +
+  scale_fill_viridis_d(alpha = 0.4) +
+  scale_color_viridis_d() +
+  guides(
+    linetype = guide_legend(override.aes = list(linewidth = 1.5))
+  ) +
+  labs(
+    title = "Distribution of Individualized Treatment Effects",
+    x = "Predicted ITE (Treatment – Baseline)",
+    y = "Density"
+  ) +
+  theme_minimal()
+#-------------------------------------------------------------------------------
+
+medians <- ite_long %>%
+  group_by(Contrast) %>%
+  summarize(med = median(ITE, na.rm = TRUE))
+
+medians <- medians %>%
+  mutate(
+    label = paste0(
+      "Median = ", round(med, 2))
+    )
+
+violin.fig <- ggplot(ite_long, aes(x = Contrast, y = ITE, fill = Contrast)) +
+  geom_violin(trim = FALSE, alpha = 0.6, color = "darkgray") +
+  geom_boxplot(width = 0.1, outlier.shape = NA, alpha = 0.5) +
+  geom_text(data = medians,
+            aes(y = 1.0,                  
+                label = label),    
+            hjust = 1.0,                 
+            size = 4,                 
+            color = "black") +
+  
+  labs(
+    title = "Distribution of Individualized Treatment Effects",
+    x = "Treatment",
+    y = "Predicted ITE"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5)
+  )
+
+
+violin.fig <- ggplot(ite_long, aes(x = Contrast, y = ITE)) +
+  geom_violin(trim = FALSE, alpha = 0.6, fill = "gray80", color = "black") +
+  geom_boxplot(width = 0.1, outlier.shape = NA, alpha = 0.5, fill = "white", color = "black") +
+  geom_text(data = medians,
+            aes(y = 1.5,                  
+                label = label),    
+            hjust = 1.2,                 
+            size = 4,                 
+            color = "black") +
+  
+  labs(
+    title = "Distribution of Individualized Treatment Effects",
+    x = "Treatment",
+    y = "Predicted ITE"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5)
+  )
+
+#-------------------------------------------------------------------------------
+# ite_long <- ite_long %>%
+#   group_by(Contrast) %>%
+#   mutate(rank = rank(ITE))
+# 
+# ggplot(ite_long, aes(x = rank, y = ITE, color = Contrast)) +
+#   geom_point(alpha = 0.6) +
+#   geom_hline(yintercept = 0, linetype = "dashed") +
+#   labs(title = "Ranked Individualized Treatment Effects by Treatment Contrast",
+#        x = "Individuals (sorted within treatment)",
+#        y = "Predicted ITE") +
+#   theme_light()
+# 
+# ggplot(ite, aes(x = `y2-y1`, y = `y3-y1`)) +
+#   geom_point(alpha = 0.6) +
+#   geom_hline(yintercept = 0, linetype = "dashed") +
+#   geom_vline(xintercept = 0, linetype = "dashed") +
+#   labs(title = "Comparison of Individualized Effects: y2-y1 vs y3-y1",
+#        x = "ITE (Former – Never)",
+#        y = "ITE (Current – Never)") 
+# 
+# ggplot(ite, aes(x = `y2-y1`, y = `y3-y1`, color = `y2-y1`)) +
+#   geom_point(size = 2, alpha = 0.7) +
+#   scale_color_gradient2(
+#     low = "blue",
+#     mid = "white",
+#     high = "red",
+#     midpoint = 0
+#   ) +
+#   geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+#   geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+#   labs(
+#     title = "Comparison of Individualized Effects: y2–y1 vs y3–y1",
+#     x = "ITE (y2–y1)",
+#     y = "ITE (y3–y1)",
+#     color = "Effect (y2–y1)"
+#   ) +
+#   theme_minimal()
+#-------------------------------------------------------------------------------
+
+freq.tab <- table(df$smklevel)
+
+ave.tab <- aggregate(BMXBMI ~ smklevel, data = df, mean)
+
+#-------------------------------------------------------------------------------
+
+depth.fig <- ggplot(depth, aes(x = reorder(Variable, -depth), y = depth)) +
+  geom_bar(stat = "identity", fill = "black") +
+  coord_flip() +
+  labs(
+    title = "Variable Importance by Minimal Depth",
+    x = "Variable",
+    y = "Minimal Depth"
+  ) +
+  theme_minimal(base_size = 13)
+
+#-------------------------------------------------------------------------------
+
+dfite <- cbind(ite, df)
+dfite_long <- as.data.frame(dfite) %>%
+  pivot_longer(cols = c(`y2-y1`, `y3-y1`), 
+               names_to = "Contrast", values_to = "ITE")
+
+dfite_long <- dfite_long %>%
+  mutate(
+    IncomeGroup = case_when(
+      INDFMPIR < 1.3 ~ "Low (<1.3)",
+      INDFMPIR >= 1.3 & INDFMPIR < 3.5 ~ "Middle (1.3–3.4)",
+      INDFMPIR >= 3.5 ~ "High (≥3.5)"
+    ),
+    IncomeGroup = factor(IncomeGroup, 
+                         levels = c("Low (<1.3)", "Middle (1.3–3.4)", "High (≥3.5)")),
+
+  Contrast = recode(Contrast,
+                           "y2-y1" = "Former",
+                           "y3-y1" = "Current"),
+  
+  Contrast = factor(
+      Contrast,
+      levels = c("Former", "Current") ))
+
+poverty.fig <- ggplot(dfite_long, aes(x = factor(Contrast), y = ITE, color = IncomeGroup)) +
+  geom_jitter(alpha = 0.15, width = 0.2, size = 1) +  # scattered individual ITEs
+  geom_smooth(aes(group = IncomeGroup, linetype = IncomeGroup),
+              method = "loess", se = FALSE, size = 1) +  # smoothed trend
+  labs(
+    x = "Smoking Status",
+    y = "ITE",
+    color = "Family Income / Poverty Ratio",
+    linetype = "Family Income / Poverty Ratio",
+    title = "Relationship between ITE and Smoking Status",
+    subtitle = "Grouped by Ratio of Family Income to Poverty"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "right")
+
+poverty.fig <- ggplot(dfite_long, aes(x = factor(Contrast), y = ITE, color = IncomeGroup)) +
+  geom_jitter(alpha = 0.15, width = 0.2, size = 1) +
+  geom_smooth(aes(group = IncomeGroup, linetype = IncomeGroup),
+              method = "loess", se = FALSE, size = 1) +
+  scale_color_viridis_d(option = "D") +
+  labs(
+    x = "Smoking Status",
+    y = "ITE",
+    color = "Family Income / Poverty Ratio",
+    linetype = "Family Income / Poverty Ratio",
+    title = "Relationship between ITE and Smoking Status",
+    subtitle = "Grouped by Ratio of Family Income to Poverty"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "right")
+
+#-------------------------------------------------------------------------------
+
+ITE_summary <- as.data.frame(ite) %>%
+  rowwise() %>%
+  mutate(
+    # find which of the two ITEs is smaller
+    Lowest_ITE = min(`y2-y1`, `y3-y1`, na.rm = TRUE),
+    # label which contrast gave that smallest ITE
+    Best_Treatment = case_when(
+      Lowest_ITE == `y2-y1` ~ "Former",
+      Lowest_ITE == `y3-y1` ~ "Current",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  ungroup()
+ITE_summary <- cbind(ITE_summary, df)
+
+ave.opt <- ITE_summary %>%
+  group_by(Best_Treatment) %>%
+  summarise(
+    mean_Age = mean(RIDAGEYR, na.rm = TRUE),
+    mean_BMI = mean(BMXBMI, na.rm = TRUE),
+    mean_INDFMPIR = mean(INDFMPIR, na.rm = TRUE),
+    mean_pastlbs = mean(WHD050, na.rm = TRUE),
+    mean_ITE = mean(Lowest_ITE, na.rm = TRUE)
+  )
+
+#-------------------------------------------------------------------------------
+
+bmi.fig
+den.fig
+violin.fig
+freq.tab
+ave.tab
+depth.fig
+poverty.fig
+ave.opt
+
+```

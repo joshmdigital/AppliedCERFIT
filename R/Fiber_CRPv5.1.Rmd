@@ -1,0 +1,1031 @@
+---
+title: "Fiber_CRPv5.1"
+output: pdf_document
+date: "2025-11-17"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r, packages}
+library(haven)
+library(dplyr)
+library(purrr)
+library(tidyr)
+library(ggplot2)
+library(knitr)
+library(kableExtra)
+library(CERFIT)
+
+```
+
+```{r readin}
+library(haven)
+
+# Body Measures
+bmx <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/BMX_L.xpt')
+
+#Smoking
+smq <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/SMQ_L.xpt')
+
+#Weight History
+whq <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/WHQ_L.xpt')
+
+#Physical Activity
+paq <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/PAQ_L.xpt')
+
+#Alcohol Use
+alq <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/ALQ_L.xpt')
+
+#Demographics
+demo <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/DEMO_L.xpt')
+
+#Blood Pressure & Cholesterol
+bpq <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/BPQ_L.xpt')
+
+#Diabetes
+diq <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/DIQ_L.xpt')
+
+#Medical Conditions 
+mcq <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/MCQ_L.xpt')
+
+#Diet Behavior and Nutrition
+dbq <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/DBQ_L.xpt')
+
+#CRP C-reactive protein
+crp <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/HSCRP_L.xpt')
+
+#Sleep 
+slp <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/SLQ_L.xpt')
+
+#Nutrition D1
+nud1 <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/DR1TOT_L.xpt')
+
+nud2 <- read_xpt('/Users/joshuamoffat/Library/Mobile Documents/com~apple~CloudDocs/SDSU/Thesis/R Examples/NHANES/DR2TOT_L.xpt')
+```
+
+```{r datafunc}
+library(dplyr)
+library(purrr)
+
+# merge all datasets by subject ID
+merge_by_id <- function(datasets, id_var = "SEQN") {
+  reduce(datasets, full_join, by = id_var)
+}
+
+# Subset to subjects with complete data for given variables,
+# and keep only those variables (plus the ID)
+subset_complete <- function(data, vars, id_var = "SEQN") {
+  data %>%
+    select(all_of(c(id_var, vars)))
+    
+}
+
+na_filter <- function(data, vars)  {
+   data %>%
+    filter(if_all(all_of(vars), ~ !is.na(.)))
+}
+
+
+factorize_vars <- function(data, vars) {
+  data %>%
+    mutate(across(all_of(vars), as.factor))
+}
+
+clean_drop <- function(data) {
+  # Dictionary of codes to drop
+  special_codes <- list(
+    DMDEDUC2 = 9,
+    DMDMARTZ = c(77, 99),
+    ALQ151   = c(7, 9),
+    BPQ020   = c(7, 9),
+    BPQ080   = c(7, 9),
+    DIQ010   = c(7, 9),
+    SMQ020   = c(7, 9),
+    PAD680   = c(7777, 9999),
+    WHD050   = c(7777, 9999),
+    WHQ070   = c(7, 9),
+    SMD650   = c(999),
+    PAD790Q  = c(7777, 9999),
+    WHD020   = c(7777, 9999),
+    DBQ940   = 9
+  )
+  
+  cleaned <- data
+  dropped <- data[0, ]  
+  
+  # Loop through variables and remove rows with special codes
+  for (var in names(special_codes)) {
+    if (var %in% names(cleaned)) {
+      bad_rows <- cleaned[[var]] %in% special_codes[[var]]
+      if (any(bad_rows)) {
+        dropped <- rbind(dropped, cleaned[bad_rows, ])
+        cleaned <- cleaned[!bad_rows, ]
+      }
+    }
+  }
+  
+  return(list(cleaned = cleaned, dropped = dropped))
+}
+
+```
+
+```{r subset}
+all <- merge_by_id(list(alq, bmx, bpq, demo, diq, paq, smq, whq, mcq, dbq, crp,slp, nud1, nud2), id_var = "SEQN")
+
+varsToUse<- c("RIAGENDR", "RIDAGEYR", "RIDRETH3", "DMDEDUC2", "DMDMARTZ", "INDFMPIR", "BMXBMI", "BPQ020", "BPQ080", "SMQ020", "PAD680", "WHQ070", "LBXHSCRP", "SLD012", "DR1TFIBE", "DR1TSUGR", "DR1TATOC", "DR1TVARA", "DR1TVC", "DR1TMAGN", "DR1TSODI", "DR1TSFAT", "DR1TCHOL", "DR1TATOA", "DR1TFOLA", "DR2TFIBE", "DR2TSUGR", "DR2TATOC", "DR2TVARA", "DR2TVC", "DR2TMAGN", "DR2TSODI", "DR2TSFAT", "DR2TCHOL", "DR2TATOA", "DR2TFOLA")
+
+varsneNA <-  c("RIAGENDR", "RIDAGEYR", "RIDRETH3", "DMDEDUC2", "DMDMARTZ", "INDFMPIR", "BMXBMI", "BPQ020", "BPQ080", "SMQ020", "PAD680", "WHQ070", "LBXHSCRP","SLD012", "DR1TFIBE","DR1TSUGR", "DR1TATOC", "DR1TVARA", "DR1TVC", "DR1TMAGN", "DR1TSODI", "DR1TSFAT", "DR1TCHOL", "DR1TATOA", "DR1TFOLA", "DR2TFIBE", "DR2TSUGR", "DR2TATOC", "DR2TVARA", "DR2TVC", "DR2TMAGN", "DR2TSODI", "DR2TSFAT", "DR2TCHOL", "DR2TATOA", "DR2TFOLA")
+
+varsFactors <- c("RIAGENDR", "RIDRETH3", "DMDEDUC2", "DMDMARTZ", "BPQ020",
+"BPQ080", "SMQ020", "WHQ070")
+
+analysis <- subset_complete(all, varsToUse)
+analysis.na <- na_filter(analysis, varsneNA)
+
+analysis2 <- clean_drop(analysis.na)
+nhanes.clean <- factorize_vars(analysis2$cleaned, varsFactors)
+analysis_dropped <- analysis2$dropped
+
+#-------------------------------------------------------------------------------
+df <- as.data.frame(nhanes.clean, check.names = FALSE) 
+
+dfcrp <- df %>%
+  filter(LBXHSCRP <= 10)
+#-------------------------------------------------------------------------------
+
+nutrients <- c("TFIBE", "TSUGR", "TATOC", "TVARA", "TVC", "TMAGN", "TSODI", "TSFAT", "TCHOL", "TATOA", "TFOLA")
+
+for (nutrient in nutrients) {
+  var_name <- paste0(nutrient, "_avg")
+  day1_var <- paste0("DR1", nutrient)
+  day2_var <- paste0("DR2", nutrient)
+  
+  dfcrp[[var_name]] <- rowMeans(dfcrp[, c(day1_var, day2_var)], na.rm = TRUE)
+}
+
+#-------------------------------------------------------------------------------
+decile_breaks <- quantile(dfcrp$TFIBE_avg, probs = seq(0, 1, 1/6), na.rm = TRUE)
+
+combined_breaks <- c(0.35, 8.95, 15.0999, 23.7, 82.65)
+
+dfcrp$fiber_Bin <- cut(
+  dfcrp$TFIBE_avg,
+  breaks = unique(decile_breaks), 
+  include.lowest = TRUE,
+  labels = FALSE 
+)
+dfcrp$fiber_Bin <- factor(dfcrp$fiber_Bin ,ordered = TRUE)
+
+```
+
+```{r fit}
+
+set.seed(863)
+
+fit <- CERFIT(LBXHSCRP ~ RIAGENDR + RIDAGEYR + RIDRETH3 + DMDEDUC2 + DMDMARTZ + INDFMPIR + BMXBMI + BPQ020 + BPQ080 + SMQ020 + WHQ070 + PAD680 + SLD012 + TSUGR_avg + TATOC_avg + TVARA_avg + TVC_avg + TMAGN_avg + TSODI_avg + TSFAT_avg + TCHOL_avg + TATOA_avg + TFOLA_avg | fiber_Bin,
+              method = "observational",
+              PropForm = "GBM",
+              data = dfcrp,
+              mtry = 11,
+              oob = TRUE,
+              ntrees = 1100)
+
+depth <- MinDepth(fit)
+depth <- as.data.frame(depth)
+depth$Variable <- rownames(depth)
+
+var_labels <- c(
+  RIAGENDR   = "Sex",
+  RIDAGEYR   = "Age in Years at Screening",
+  RIDRETH3   = "Race",
+  DMDEDUC2   = "Education Level",
+  DMDMARTZ   = "Marital Status",
+  INDFMPIR   = "Ratio of Family Income to Poverty",
+  BMXBMI     = "Body Mass Index (kg/m^2)",
+  BPQ020     = "Ever Told You Had High Blood Pressure",
+  BPQ080     = "Doctor Told You - High Cholesterol Level",
+  SMQ020     = "Smoked at Least 100 Cigarettes in Life",
+  PAD680     = "Minutes Sedentary Activity",
+  WHQ070     = "Tried to Lose Weight in Past Year",
+  LBXHSCRP   = "HS C-Reactive Protein (mg/L)",
+  SLD012     = "Sleep Hours - Weekdays or Workdays",
+  TFIBE_avg  = "Fiber Intake (gm)",
+  TSUGR_avg  = "Sugar Intake (gm)",
+  TATOC_avg  = "Vitamin E Intake (mg)",
+  TVARA_avg  = "Vitamin A Intake (mcg)",
+  TVC_avg    = "Vitamin C Intake (mg)",
+  TMAGN_avg  = "Magnesium Intake (mg)",
+  TSODI_avg  = "Sodium Intake (mg)",
+  TSFAT_avg  = "Total Saturated Fatty Acids Intake (gm)",
+  TCHOL_avg  = "Cholesterol Intake (mg)",
+  TATOA_avg  = "Added Vitamin E Intake (mg)",
+  TFOLA_avg  = "Total Folate Intake (mcg)"
+)
+
+depth$Variable <- var_labels[depth$Variable]
+
+
+```
+
+```{r predict}
+res <- predict(fit, type = "response")
+ite <- predict(fit, type = "ITE")
+
+```
+
+```{r median se}
+median_se <- function(data, predictions, trt_var, y_var) {
+ 
+  trt_levels <- unique(data[[trt_var]])
+  if (!all(trt_levels %in% colnames(predictions))) {
+    stop("Treatment levels and prediction columns do not match.")
+  }
+ 
+  df_combined <- cbind(data, predictions)
+  
+  df_combined$pred_used <- mapply(function(pred_row, trt) pred_row[[trt]], 
+                                  split(df_combined[, colnames(predictions)], seq_len(nrow(df_combined))), 
+                                  df_combined[[trt_var]])
+  
+  df_combined$residual <- df_combined[[y_var]] - df_combined$pred_used
+  median_se_overall <- median(df_combined$residual^2, na.rm = TRUE)
+  
+  median_se_by_treatment <- tapply(df_combined$residual^2, df_combined[[trt_var]], median, na.rm = TRUE)
+  
+  return(list(
+    combined_data = df_combined,
+    median_se_overall = median_se_overall,
+    median_se_by_treatment = median_se_by_treatment
+  ))
+}
+
+colnames(res) <- 1:6
+median.se <- median_se(
+  data = dfcrp,
+  predictions = res,   
+  trt_var = "fiber_Bin",
+  y_var = "LBXHSCRP"
+)
+medianse.df <- median.se$combined_data
+sqrt(median.se$median_se_overall)
+sqrt(median.se$median_se_by_treatment)
+
+```
+
+```{r mse}
+combine_and_calc_mse <- function(data, predictions, trt_var, y_var) {
+  
+  # Ensure treatments align
+  trt_levels <- unique(data[[trt_var]])
+  if (!all(trt_levels %in% colnames(predictions))) {
+    stop("Treatment levels and prediction columns do not match.")
+  }
+  
+  # Combine data and predictions
+  df_combined <- cbind(data, predictions)
+  
+  # Extract the predicted response for the actual treatment each subject received
+  df_combined$pred_used <- mapply(function(pred_row, trt) pred_row[[trt]], 
+                                  split(df_combined[, colnames(predictions)], seq_len(nrow(df_combined))), 
+                                  df_combined[[trt_var]])
+  
+  # Calculate residuals and MSE
+  df_combined$residual <- df_combined[[y_var]] - df_combined$pred_used
+  mse_overall <- mean(df_combined$residual^2, na.rm = TRUE)
+  
+  # MSE per treatment level
+  mse_by_treatment <- tapply(df_combined$residual^2, df_combined[[trt_var]], mean, na.rm = TRUE)
+  
+  return(list(
+    combined_data = df_combined,
+    mse_overall = mse_overall,
+    mse_by_treatment = mse_by_treatment
+  ))
+}
+
+colnames(res) <- 1:6
+mse <- combine_and_calc_mse(
+  data = dfcrp,
+  predictions = res,   
+  trt_var = "fiber_Bin",
+  y_var = "LBXHSCRP"
+)
+mse.df <- mse$combined_data
+sqrt(mse$mse_overall)
+sqrt(mse$mse_by_treatment)
+
+nRMSE_SD = sqrt(mse$mse_overall) / sd(dfcrp$LBXHSCRP)
+nRMSE_SD
+
+nRMSE_range = sqrt(mse$mse_overall) / (max(dfcrp$LBXHSCRP) - min(dfcrp$LBXHSCRP))
+nRMSE_range
+```
+
+```{r, table 1}
+
+library(gtsummary)
+library(labelled)
+
+dftable <- dfcrp %>%
+  select(-SEQN, -fiber_Bin, -DR1TFIBE, -DR1TATOC, -DR1TVARA, -DR1TVC, -DR1TMAGN, -DR1TSODI, -DR1TSFAT, -DR1TCHOL, -DR1TATOA, -DR1TFOLA, -DR1TSUGR, -DR2TFIBE, -DR2TATOC, -DR2TVARA, -DR2TVC, -DR2TMAGN, -DR2TSODI, -DR2TSFAT, -DR2TCHOL, -DR2TATOA, -DR2TFOLA, -DR2TSUGR) %>%
+  
+  mutate(
+    RIAGENDR = factor(
+      RIAGENDR,
+      levels = c(1, 2),
+      labels = c("Male", "Female")
+    ),
+    RIDRETH3 = factor(
+      RIDRETH3,
+      levels = c(1, 2, 3, 4, 6, 7),
+      labels = c("Mexican American", "Other Hispanic", "Non-Hispanic White", "Non-Hispanic Black", "Non-Hispanic Asian", "Other Race - Including Multi-Racial")
+      ),
+      DMDEDUC2 = factor(
+      DMDEDUC2,
+      levels = c(1, 2, 3, 4, 5),
+      labels = c("Less than 9th grade", "	9-11th grade (Includes 12th grade with no diploma)", "High school graduate/GED or equivalent", "Some college or AA degree", "College graduate or above")
+    ),
+    DMDMARTZ = factor(
+      DMDMARTZ,
+      levels = c(1, 2, 3),
+      labels = c("Married/Living with partner", "Widowed/Divorced/Separated", "Never married")
+    ),
+    BPQ020 = factor(
+      BPQ020,
+      levels = c(1, 2),
+      labels = c("Yes", "No")
+    ),
+    BPQ080 = factor(
+      BPQ080,
+      levels = c(1, 2),
+      labels = c("Yes", "No")
+    ),
+    SMQ020 = factor(
+      SMQ020,
+      levels = c(1, 2),
+      labels = c("Yes", "No")
+    ),
+    WHQ070 = factor(
+      WHQ070,
+      levels = c(1, 2),
+      labels = c("Yes", "No")
+    )
+  ) %>% 
+  set_variable_labels(RIAGENDR = "Sex", RIDRETH3 = "Race", DMDEDUC2 = "Education level", DMDMARTZ = "Marital status", BPQ020 = "Ever told you had high blood pressure", BPQ080 = "Doctor told you - high cholesterol level", SMQ020 = "Smoked at least 100 cigarettes in life", WHQ070 = "Tried to lose weight in past year", TFIBE_avg = "Fiber intake* (gm)", TSUGR_avg = "Sugar intake* (gm)", TATOC_avg= "Vitamin E intake* (mg)",TVARA_avg = "Vitamin A intake* (mcg)", TVC_avg= "Vitamin C intake* (mg)", TMAGN_avg = "Magnesium intake* (mg)", TSODI_avg = "Sodium intake* (mg)", TSFAT_avg= "Total saturated fatty acids intake* (gm)", TCHOL_avg = "Cholesterol intake* (mg)", TATOA_avg = "Added Vitamin E intake* (mg)", TFOLA_avg = "Total folate intake* (mcg)") 
+
+tbl1 <- tbl_summary(
+  data = dftable,
+  statistic = list(
+    all_continuous() ~ "{mean} ({sd})",
+    all_categorical() ~ "{n} ({p}%)"
+  ),
+  missing = "no"
+)
+
+tbl1 <- tbl1 %>%
+  modify_table_body(
+    ~ .x %>%
+      mutate(
+        label = ifelse(row_type == "label",
+                       paste0(variable, ": ", var_label),
+                       label)
+      )
+  )%>%
+  modify_source_note(
+    "*Micronutrient variables represent the average of the Day 1 and Day 2 dietary interviews."
+  )%>%
+  modify_header(label = "Variable (name: description)") %>%
+   modify_caption("Descriptive statistics of study variables from NHANES. The left column displays the variable name and description and the right column reports sample size (proportion) for qualitative variables and mean (standard deviation) for quantitative variables") 
+
+kbl_tbl1 <- tbl1 %>%
+  as_kable_extra(format = "latex")
+
+kbl_tbl1
+
+#ave.tab <- aggregate(LBXHSCRP ~ fiber_Bin, data = dfcrp, mean)
+#names(ave.tab)[2] <- "mean_CRP"
+
+ave.tab <- dfcrp %>%
+  group_by(fiber_Bin) %>%
+  summarise(
+    CRP = sprintf(
+      "%.2f (%.2f)",
+      mean(LBXHSCRP, na.rm = TRUE),
+      sd(LBXHSCRP, na.rm = TRUE)
+    ),
+    .groups = "drop"
+  ) %>%
+   rename(`Mean CRP (SD)` = CRP)
+
+kable(
+  ave.tab,
+  format   = "latex",
+  booktabs = TRUE,
+  caption  = "Mean CRP by fiber level.",
+  align    = c("l","r"),
+  digits   = 3
+) %>%
+  kable_styling(position = "center")
+
+range.tab <- table(decile_breaks)
+range.df <- data.frame(
+  fiber_Bin = seq_len(length(decile_breaks) - 1),
+  Lower = decile_breaks[-length(decile_breaks)],
+  Upper = decile_breaks[-1]
+)
+pct <- sub("%", "", rownames(range.df))      # remove %
+pct <- as.numeric(pct)                       # convert to numeric
+pct <- sprintf("%.2f%%", pct)     
+rownames(range.df) <- pct
+
+kable(
+  range.df,
+  format   = "latex",
+  booktabs = TRUE,
+  caption  = "Fiber bins and their corresponding ranges.",
+  align    = c("c", "r", "r"),
+  digits   = 2
+) %>%
+  kable_styling(position = "center")
+
+freq.tab <- table(dfcrp$fiber_Bin)
+freq.df  <- as.data.frame(freq.tab)
+names(freq.df) <- c("fiber_Bin", "Count")
+
+kable(
+  freq.df,
+  format   = "latex",
+  booktabs = TRUE,
+  caption  = "Number of subjects in each fiber bin",
+  align    = c("l","r")
+) %>%
+  kable_styling(position = "center")
+
+ave.tab
+range.tab
+freq.tab
+
+ave.tab <- ave.tab %>%
+  mutate(fiber_Bin = as.integer(as.character(fiber_Bin)))
+
+range.df <- range.df %>%
+  mutate(fiber_Bin = as.integer(fiber_Bin))
+
+freq.df <- freq.df %>%
+  mutate(fiber_Bin = as.integer(as.character(fiber_Bin)))
+
+final.tab <- range.df %>%
+  left_join(freq.df, by = "fiber_Bin") %>%
+  left_join(ave.tab,  by = "fiber_Bin") %>%
+   rename(`Fiber Intake Sextiles` = fiber_Bin)
+
+kable(
+  final.tab,
+  format   = "latex",
+  booktabs = TRUE,
+  caption  = "Summary of fiber ranges, sample sizes, and mean (SD) of CRP by fiber intake",
+  align    = c("c", "r", "r", "r", "r"),
+  digits   = 2
+) %>%
+  kable_styling(position = "center")
+```
+
+
+```{r plot3}
+library(tidyr)
+library(ggplot2)
+ite.l <- as.data.frame(ite) %>%
+  pivot_longer(cols = everything(), 
+               names_to = "Level_Fiber", values_to = "ITE")
+
+medians <- ite.l %>%
+  group_by(Level_Fiber) %>%
+  summarize(med = median(ITE, na.rm = TRUE))
+
+medians <- medians %>%
+  mutate(
+    label = paste0(
+      "Median = ", round(med, 2))
+    )
+
+violin.fig <- ggplot(ite.l, aes(x = Level_Fiber, y = ITE, fill = Level_Fiber)) +
+  geom_violin(trim = FALSE, alpha = 0.6, color = "darkgray") +
+  geom_boxplot(width = 0.1, outlier.shape = NA, alpha = 0.5) +
+  
+  geom_text(data = medians,
+            aes(y = med,                  
+                label = label),    
+            vjust = -15,                  
+            hjust = 0.5,                 
+            size = 3,                 
+            color = "black") +
+  
+  labs(
+    title = "Violin Plots of ITE by Dietary Fiber Intake Level",
+    x = "Fiber Intake",
+    y = "Predicted ITE"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5)
+  )
+
+print(violin.fig)
+
+
+violin.fig <- ggplot(ite.l, aes(x = Level_Fiber, y = ITE)) +
+  geom_violin(
+    trim = FALSE,
+    fill = "gray80",
+    color = "black"
+  ) +
+  geom_boxplot(
+    width = 0.1,
+    outlier.shape = NA,
+    fill = "white",
+    color = "black"
+  ) +
+  geom_text(
+    data = medians,
+    aes(y = 2.2, label = label),
+     hjust = 0.7,   
+    size = 3.5,
+    color = "black"
+  ) +
+  labs(
+    title = "Violin Plots of ITE by Dietary Fiber Intake Level",
+    x = "Fiber Intake",
+    y = "Predicted ITE"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5)
+  )
+```
+
+```{r depthfig}
+depth.fig <- ggplot(depth, aes(x = reorder(Variable, -depth), y = depth)) +
+  geom_bar(stat = "identity", fill = "black") +
+  coord_flip() +
+  labs(
+    title = "Variable Importance by Minimal Depth",
+    x = "Variable",
+    y = "Minimal Depth"
+  ) +
+  theme_minimal(base_size = 13)
+print(depth.fig)
+```
+
+
+
+```{r ite levels}
+
+dfcrp %>%
+  filter(fiber_Bin == 4) %>%
+  summary()
+
+dfcrp %>%
+  filter(fiber_Bin == 2) %>%
+  summary()
+```
+
+```{r vitCplot}
+dfite <- cbind(ite, dfcrp)
+dfite_long <- as.data.frame(dfite) %>%
+  pivot_longer(cols = c(`y2-y1`, `y3-y1`,`y4-y1`,`y5-y1`,`y6-y1`), 
+               names_to = "Level_Fiber", values_to = "ITE")
+
+vitC_breaks <- quantile(dfcrp$TVC_avg, probs = seq(0, 1, 1/3), na.rm = TRUE)
+
+dfite_long <- dfite_long %>%
+  mutate(
+    vitC_Level = case_when(
+      TVC_avg < 40.49 ~ "Low (<40.49)",
+      TVC_avg >= 40.49 & TVC_avg < 91.916 ~ "Middle (40.49–91.916)",
+      TVC_avg >= 91.916 ~ "High (≥91.916)"
+    ),
+    vitC_Level = factor(vitC_Level, 
+                         levels = c("Low (<40.49)", "Middle (40.49–91.916)", "High (≥91.916)")),
+  
+  
+  Level_Fiber = factor(Level_Fiber)
+  
+  )
+
+vitC.plot <- ggplot(dfite_long, aes(x = factor(Level_Fiber), y = ITE, color = vitC_Level)) +
+  geom_jitter(alpha = 0.15, width = 0.2, size = 1) +  # scattered individual ITEs
+  geom_smooth(aes(group = vitC_Level, linetype = vitC_Level),
+              method = "loess", se = FALSE, linewidth = 1) +  # smoothed trend
+  labs(
+    x = "Fiber Level",
+    y = "ITE",
+    color = "Vitamin C Level",
+    linetype = "Vitamin C Level",
+    title = "Relationship between ITE and Fiber Level",
+    subtitle = "Grouped by Vitamin C Level"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "right")
+
+print(vitC.plot)
+
+vitC.plot <- ggplot(dfite_long,
+                   aes(x = factor(Level_Fiber), y = ITE, color = vitC_Level)) +
+  geom_jitter(alpha = 0.15, width = 0.2, size = 1) +
+  geom_smooth(aes(group = vitC_Level, linetype = vitC_Level),
+              method = "loess", se = FALSE, linewidth = 1) +
+  scale_color_viridis_d(end = 0.9) +
+  scale_linetype_discrete() +
+  labs(
+    x = "Fiber Level",
+    y = "ITE",
+    color = "Vitamin C Level",
+    linetype = "Vitamin C Level",
+    title = "Relationship between ITE and Fiber Level",
+    subtitle = "Grouped by Vitamin C Level"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "right")
+
+
+```
+
+```{r opty1check}
+
+y1_opt <- long_ite %>%
+  group_by(SEQN) %>%
+  summarise(
+    all_positive = all(ITE > 0, na.rm = TRUE),
+    all_nonneg   = all(ITE >= 0, na.rm = TRUE),
+    n_levels     = sum(!is.na(ITE)),
+    .groups = "drop"
+  ) %>%
+  filter(all_positive)   # or filter(all_nonneg)
+
+# How many?
+nrow(y1_opt)
+
+# Who are they?
+y1_opt$SEQN
+
+
+dfite <- cbind(ite, dfcrp)
+
+long_ite <- dfite %>%
+  pivot_longer(
+    cols = c(`y2-y1`, `y3-y1`, `y4-y1`, `y5-y1`, `y6-y1`),
+    names_to = "Level_Fiber",
+    values_to = "ITE"
+  )
+
+y1_opt <- long_ite %>%
+  group_by(SEQN) %>%
+  summarise(
+    y1_is_optimal = all(ITE > 0, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  filter(y1_is_optimal) %>%
+  select(SEQN)
+
+
+y1_rows <- dfite %>%
+  semi_join(y1_opt, by = "SEQN") %>%
+  transmute(
+    SEQN,
+    Level_Fiber = "y1-y1",
+    ITE = 0,
+    LBXHSCRP, BMXBMI, INDFMPIR,
+    TSUGR_avg, TMAGN_avg, TFOLA_avg, TVARA_avg, TVC_avg, TFIBE_avg
+  )
+
+
+opt_ite <- long_ite %>%
+  anti_join(y1_opt, by = "SEQN") %>%
+  group_by(SEQN) %>%
+  slice_min(order_by = ITE, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+
+opt_ite2 <- bind_rows(opt_ite, y1_rows)
+
+summary_opt <- opt_ite2 %>%
+  group_by(Level_Fiber) %>%
+  summarise(
+    N = n(),
+    ITE = median(ITE, na.rm = TRUE),
+    CRP = median(LBXHSCRP, na.rm = TRUE),
+    BMI = median(BMXBMI, na.rm = TRUE),
+    Poverty_Ratio = median(INDFMPIR, na.rm = TRUE),
+    Sugar = median(TSUGR_avg, na.rm = TRUE),
+    Magnesium = median(TMAGN_avg, na.rm = TRUE),
+    Folate = median(TFOLA_avg, na.rm = TRUE),
+    Vitamin_A = median(TVARA_avg, na.rm = TRUE),
+    Vitamin_C = median(TVC_avg, na.rm = TRUE),
+    Fiber_Intake = median(TFIBE_avg, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(Level_Fiber)
+
+summary_opt_fmt <- summary_opt %>%
+  mutate(
+    N   = sprintf("%d", round(N)),
+    ITE = sprintf("%.2f", ITE),
+    across(c(CRP, BMI, Poverty_Ratio, Sugar, Magnesium,
+             Folate, Vitamin_A, Vitamin_C, Fiber_Intake),
+           ~ sprintf("%.1f", .x))
+  ) %>%
+  mutate(
+    Level_Fiber = recode(Level_Fiber,
+      "y1-y1" = "y1",
+      "y2-y1" = "y2",
+      "y3-y1" = "y3",
+      "y4-y1" = "y4",
+      "y5-y1" = "y5",
+      "y6-y1" = "y6"
+    )
+  )
+
+summary_rotated <- summary_opt_fmt %>%
+  # make it long: one row per (variable, Level_Fiber)
+  pivot_longer(
+    cols = -Level_Fiber,
+    names_to = "Variable",
+    values_to = "Value"
+  ) %>%
+  # optional: order the variables the way you like
+  mutate(
+    Variable = factor(
+      Variable,
+      levels = c(
+        "N", "ITE", "CRP", "BMI",
+        "Poverty_Ratio", "Sugar", "Magnesium",
+        "Folate", "Vitamin_A", "Vitamin_C", "Fiber_Intake"
+      ),
+      labels = c(
+        "N", "ITE", "CRP", "BMI",
+        "Poverty ratio", "Sugar", "Magnesium",
+        "Folate", "Vitamin A", "Vitamin C", "Fiber Intake"
+      )
+    )
+  ) %>%
+  arrange(Variable, Level_Fiber) %>%
+  # now go wide: columns = fiber levels, rows = variables
+  pivot_wider(
+    names_from = Level_Fiber,
+    values_from = Value
+  ) %>%
+  # make sure Variable is back to plain character for printing
+  mutate(Variable = as.character(Variable))
+
+kable(
+  summary_rotated,
+  format   = "latex",
+  booktabs = TRUE,
+  caption  = "Summary of median outcomes by optimal fiber level",
+  digits   = 3
+)
+
+```
+
+```{r optSummary}
+dfite <- cbind(ite, dfcrp)
+
+long_ite <- pivot_longer(
+  dfite,
+  cols = c(`y2-y1`, `y3-y1`,`y4-y1`,`y5-y1`,`y6-y1`),
+  names_to = "Level_Fiber",
+  values_to = "ITE"
+)
+
+opt_ite <- long_ite %>%
+  group_by(SEQN) %>%
+  slice_min(order_by = ITE, n = 1) %>%
+  ungroup()
+
+summary_opt <- opt_ite %>%
+  group_by(Level_Fiber) %>%
+  summarise(
+    N = n(), 
+    ITE = mean(ITE, na.rm=TRUE),
+    CRP = mean(LBXHSCRP, na.rm=TRUE),
+    BMI = mean(BMXBMI, na.rm=TRUE),
+    Poverty_Ratio = mean(INDFMPIR, na.rm=TRUE),
+    Sugar = mean(TSUGR_avg, na.rm=TRUE),
+    Magnesium = mean(TMAGN_avg, na.rm=TRUE),
+    Folate = mean(TFOLA_avg, na.rm=TRUE),
+    Vitamin_A = mean(TVARA_avg, na.rm=TRUE),
+    Vitamin_C = mean(TVC_avg, na.rm=TRUE)
+
+  ) %>%
+arrange(Level_Fiber)
+
+print(summary_opt)
+
+summary_rotated <- summary_opt %>%
+  # make it long: one row per (variable, Level_Fiber)
+  pivot_longer(
+    cols = -Level_Fiber,
+    names_to = "Variable",
+    values_to = "Value"
+  ) %>%
+  # optional: order the variables the way you like
+  mutate(
+    Variable = factor(
+      Variable,
+      levels = c(
+        "N", "ITE", "CRP", "BMI",
+        "Poverty_Ratio", "Sugar", "Magnesium",
+        "Folate", "Vitamin_A", "Vitamin_C"
+      ),
+      labels = c(
+        "N", "ITE", "CRP", "BMI",
+        "Poverty ratio", "Sugar", "Magnesium",
+        "Folate", "Vitamin A", "Vitamin C"
+      )
+    )
+  ) %>%
+  arrange(Variable, Level_Fiber) %>%
+  # now go wide: columns = fiber levels, rows = variables
+  pivot_wider(
+    names_from = Level_Fiber,
+    values_from = Value
+  ) %>%
+  # make sure Variable is back to plain character for printing
+  mutate(Variable = as.character(Variable))
+
+kable(
+  summary_rotated,
+  format   = "latex",
+  booktabs = TRUE,
+  caption  = "Summary of average outcomes by optimal fiber level",
+  digits   = 3
+)
+  
+```
+
+```{r prev3}
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+
+set.seed(1)
+ite.dfcrp <- cbind(ite, dfcrp)
+rand.subjid <- sample_n(ite.dfcrp, 10)
+rand.subjid$SEQN <- as.factor(rand.subjid$SEQN)
+#---------------------------
+# Map SEQN to Subject 1–10 in the order sampled
+seqn_levels <- unique(rand.subjid$SEQN)
+rand.subjid$Subject <- factor(match(rand.subjid$SEQN, seqn_levels),
+                               labels = paste("Subject", 1:10))
+#-----------------------------
+rand.subjid$q1 <- 0
+
+rand.renamed <- rand.subjid %>%
+  rename(
+    q2 = `y2-y1`,
+    q3 = `y3-y1`,
+    q4 = `y4-y1`,
+    q5 = `y5-y1`,
+    q6 = `y6-y1`
+  )
+
+long_rand <- pivot_longer(
+  rand.renamed,
+  cols = c(q1, q2, q3, q4, q5, q6),
+  names_to = "Level_Fiber",
+  values_to = "ITE"
+)
+
+lowest_ite <- long_rand %>%
+  group_by(SEQN) %>%
+  slice_min(order_by = ITE, n = 1) %>%
+  ungroup()
+
+actual_lookup <- rand.renamed %>%
+  select(SEQN, fiber_Bin) 
+actual_lookup <- actual_lookup %>%
+  mutate(xfiber_Bin = case_when(
+    fiber_Bin == 1 ~ "q1",
+    fiber_Bin == 2 ~ "q2",
+    fiber_Bin == 3 ~ "q3",
+    fiber_Bin == 4 ~ "q4",
+     fiber_Bin == 5 ~ "q5",
+     fiber_Bin == 6 ~ "q6",
+    TRUE ~ as.character(fiber_Bin) 
+  )) %>%
+  select(-fiber_Bin)
+
+square_data <- long_rand %>%
+  inner_join(actual_lookup, by = "SEQN") %>%
+  filter(Level_Fiber == xfiber_Bin)
+
+# overlap_data <- merge(
+#   overlap_data,
+#   long_rand[, c("SEQN", "Level_Fiber", "ITE")],
+#   by = c("SEQN", "Level_Fiber")
+# )
+
+overlap_data <- inner_join(
+  lowest_ite %>% select(SEQN, Level_Fiber, ITE, Subject),
+  square_data %>% select(SEQN, Level_Fiber),
+  by = c("SEQN", "Level_Fiber")
+)
+```
+
+```{r plotv3}
+
+ite.rand.plot <- ggplot(
+  data = long_rand,
+  aes(x = Level_Fiber, y = ITE, group = Subject, color = Subject)
+) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray40") +
+  geom_line(linewidth = 0.5, show.legend = FALSE) +  
+  geom_point(size = 2, show.legend = FALSE) + 
+  
+  geom_point(
+    data = lowest_ite,
+    aes(shape = "Optimal"),
+    fill = "black",
+    color = "black",
+    size = 3,
+    stroke = 1
+  ) +
+  geom_point(
+    data = overlap_data,
+    aes(shape = "Optimal = Actual"),
+    fill = "black",
+    color = "black",
+    size = 3.3,
+    stroke = 1.5
+  ) +
+  geom_point(
+    data = square_data,
+    aes(shape = "Actual"),
+    fill = "black",
+    color = "black",
+    size = 2,
+    stroke = 1.5
+  ) +
+  scale_shape_manual(
+    name = "Treatment Markers",
+    values = c(
+      "Optimal" = 21,
+      "Actual" = 22,
+      "Optimal = Actual" = 24
+    )
+  ) +
+  
+   guides(color = "none") +
+  facet_wrap(~ Subject, nrow = 2) +
+  
+  labs(
+    title = "ITE for 10 Random Subjects (Optimal ITE Circled; Actual Fiber Level Square)",
+    x = "Fiber Level",
+    y = "ITE Value"
+  ) +
+  
+  theme_bw() +
+  theme(
+    legend.position = "right",
+    strip.background = element_rect(fill = "grey90"),
+    strip.text = element_text(face = "bold")
+  )
+
+print(ite.rand.plot)
+```
+
+```{r, randtable}
+fiber_levels <- lowest_ite %>%
+  select(Subject, Level_Fiber) %>%
+  mutate(Opt.Fiber = as.integer(sub("q", "", Level_Fiber))) %>%
+  select(-Level_Fiber)
+
+rand_dat1 <- rand.renamed %>%
+  select(Subject, LBXHSCRP, TMAGN_avg, TFOLA_avg, TVARA_avg, TVC_avg, BMXBMI, TFIBE_avg, fiber_Bin) %>%
+  left_join(fiber_levels, by = "Subject") %>%
+  arrange(desc(TFIBE_avg))  %>%
+  rename(
+    "Avg Fiber"   = TFIBE_avg,
+    "Fiber Bin" = fiber_Bin,
+    "Opt Fiber"    = Opt.Fiber,
+    CRP            = LBXHSCRP,
+    Magnesium      = TMAGN_avg,
+    Folate         = TFOLA_avg,
+    "Vit A"    = TVARA_avg,
+    "Vit C"    = TVC_avg,
+    BMI            = BMXBMI
+  )
+
+kable(
+  rand_dat1,
+  format   = "latex",
+  booktabs = TRUE,
+  caption  = "Top 5 most important variables for the 10 randomly chosen subjects.",
+  align    = c("l", rep("r", ncol(rand_dat1) - 1))
+)
+```
+
+
