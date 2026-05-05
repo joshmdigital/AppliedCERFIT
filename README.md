@@ -19,7 +19,7 @@ This repository contains:
 
 ```text
 .
-├── data/              # Data files used in the analyses
+├── Data/              # Data files used in the analyses
 ├── R/                 # R scripts for analysis, modeling, figures, and tables
 ├── README.md          # Repository documentation
 └── LICENSE.md         # Repository license
