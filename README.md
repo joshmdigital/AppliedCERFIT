@@ -65,4 +65,4 @@ Moffat, J. (2026). *Estimating Individualized Treatment Effects and Optimal Trea
 
 ## License
 
-This repository is licensed under the MIT License. See `LICENSE.md` for details.
+This repository is licensed under the Apache License Version 2.0. See `LICENSE.md` for details.
